@@ -1,5 +1,5 @@
 import type { SafeConnection, ThreadsAccount } from '../domain/types'
-import { encryptToken, sha256 } from '../auth/crypto'
+import { decryptToken, encryptToken, sha256 } from '../auth/crypto'
 
 export interface OAuthStateStore {
   create(state: string, expiresAt: Date): Promise<void>
@@ -17,6 +17,16 @@ export interface ConnectionStore {
   save(input: StoredConnectionInput): Promise<void>
   getSafe(): Promise<SafeConnection>
   disconnect(): Promise<void>
+}
+
+export interface StoredCredential {
+  accountId: string
+  accessToken: string
+  expiresAt?: Date
+}
+
+export interface CredentialStore {
+  getCredential(now?: Date): Promise<StoredCredential | null>
 }
 
 export class D1OAuthStateStore implements OAuthStateStore {
@@ -61,6 +71,19 @@ export class D1ConnectionStore implements ConnectionStore {
       status: 'connected', accountId: row.account_id!, username: row.username ?? undefined,
       displayName: row.display_name ?? undefined, connectedAt: row.connected_at!,
       tokenExpiresAt: row.token_expires_at ?? undefined,
+    }
+  }
+
+  async getCredential(now = new Date()): Promise<StoredCredential | null> {
+    const row = await this.db.prepare(`SELECT account_id, encrypted_access_token, token_expires_at
+      FROM threads_connections WHERE id = 1`).first<Record<string, string | null>>()
+    if (!row?.account_id || !row.encrypted_access_token) return null
+    const expiresAt = row.token_expires_at ? new Date(row.token_expires_at) : undefined
+    if (expiresAt && expiresAt.getTime() <= now.getTime()) return { accountId: row.account_id, accessToken: '', expiresAt }
+    return {
+      accountId: row.account_id,
+      accessToken: await decryptToken(row.encrypted_access_token, this.secret),
+      expiresAt,
     }
   }
 

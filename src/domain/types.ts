@@ -1,5 +1,5 @@
 export type ConnectionStatus = 'connected' | 'disconnected' | 'not_configured' | 'error'
-export type CapabilityStatus = 'supported' | 'unsupported' | 'not_configured' | 'error'
+export type CapabilityStatus = 'supported' | 'unsupported' | 'not_configured' | 'empty' | 'error'
 
 export interface SafeConnection {
   status: ConnectionStatus
@@ -16,6 +16,62 @@ export interface ThreadsAccount {
   id: string
   username?: string
   name?: string
+  profilePictureUrl?: string
+  biography?: string
+  isVerified?: boolean
+}
+
+export interface ThreadsPost {
+  id: string
+  text?: string
+  timestamp?: string
+  permalink?: string
+  mediaType?: string
+  mediaUrl?: string
+  thumbnailUrl?: string
+  username?: string
+  shortcode?: string
+  topicTag?: string
+  altText?: string
+  linkAttachmentUrl?: string
+  gifUrl?: string
+  isQuotePost?: boolean
+  quotedPostId?: string
+  repostedPostId?: string
+}
+
+export interface ThreadsReply extends ThreadsPost {
+  hasReplies?: boolean
+  isReply?: boolean
+  isOwnedByMe?: boolean
+  rootPostId?: string
+  repliedToId?: string
+  hideStatus?: string
+  profilePictureUrl?: string
+  isVerified?: boolean
+}
+
+export interface InsightMetric {
+  name: string
+  title?: string
+  description?: string
+  period?: string
+  total?: number
+  values?: Array<{ value: number; endTime?: string }>
+  linkValues?: Array<{ value: number; linkUrl?: string }>
+}
+
+export interface PageResult<T> {
+  status: 'supported' | 'empty'
+  items: T[]
+  nextCursor?: string
+}
+
+export interface CapabilityResult<T> {
+  status: CapabilityStatus
+  data?: T
+  message?: string
+  reauthorizationRequired?: boolean
 }
 
 export class AppError extends Error {

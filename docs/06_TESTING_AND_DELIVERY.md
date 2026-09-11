@@ -1,32 +1,71 @@
 # 06 — Testing and Delivery
 
-## Test layers
+## Automated quality gate
 
-1. Config validation: missing/invalid environment values fail safely.
-2. OAuth: state mismatch, callback error, token exchange success/failure.
-3. API client: success, permission denial, rate limit, malformed response, timeout.
-4. Normalizers: provider payloads map to stable application objects.
-5. UI: dashboard, posts, compose, engagement, insights, connection states.
-6. E2E: connect account in a safe environment and publish a real test post.
+Run:
 
-## Phase 1 acceptance checklist
+```bash
+npm run typecheck
+npm test
+npm run build
+```
 
-- [x] Missing configuration fails safely and is visible in the UI.
-- [x] OAuth initiation, callback, single-use state validation, and provider failures are covered by tests.
-- [x] Account identity is normalized and browser responses exclude tokens/secrets.
-- [x] Unsupported later-phase capabilities are clearly labelled.
-- [x] Type checking, automated tests, and production build pass.
-- [ ] A real operator-owned Threads tester/account completes OAuth in the deployed environment.
+## Current automated coverage
 
-The Phase 1 gate remains `BLOCKED — configuration required` until the final real-account item is verified.
+### Configuration and Phase 1
 
-## Later-phase acceptance checklist
+- Missing/invalid environment values fail safely.
+- OAuth state is cryptographically sized and single-use.
+- Authorization cancellation, invalid state, token exchange failure, and account lookup failure are normalized.
+- Safe connection objects do not expose credentials.
 
-- [ ] Real posts load.
-- [ ] Real supported engagement data loads.
-- [ ] Real supported insights load.
-- [ ] Real post can be created/published.
+### Phase 2 provider client
 
-## Delivery rule
+- Account read and allow-listed normalization.
+- Posts read with cursor pagination.
+- Reply read using the supported top-level endpoint.
+- Post and account insights contracts.
+- Bearer tokens stay in server-to-provider authorization headers and do not enter provider URLs.
+- Permission denial, provider failure, and expired token normalization.
 
-Do not call the project complete merely because an API request returns HTTP 200. The user must be able to perform the intended job through the actual UI.
+### Normalizers
+
+- Valid provider post/metric payloads map to stable application models.
+- Unknown fields are dropped.
+- Missing optional fields remain absent.
+- Missing metric values are not converted to zero.
+- Malformed records and page payloads fail safely.
+
+### Read service
+
+- Connected-state requirement.
+- Successful account/posts reads.
+- Pagination cursor forwarding and bounds.
+- Explicit supported/empty/unsupported/error states.
+- Invalid media IDs rejected before provider calls.
+- Expired authorization produces a reconnect state.
+
+### UI and client security
+
+- Dashboard, Posts, Engagement, Insights, and Settings shells render.
+- Loading, empty, unsupported, error, and Load More states are present.
+- Server-only environment names, access tokens, and provider Authorization headers are not shipped in browser assets.
+
+## Manual real-account verification
+
+1. Configure all server secrets and apply the D1 migration.
+2. Add the exact callback URL in Meta App Dashboard.
+3. Ensure the account is a Threads Tester while the app is in development and accept the invitation.
+4. Sign in at `/settings` and reconnect the account.
+5. Confirm the authorization window requests `threads_basic`, `threads_read_replies`, and `threads_manage_insights` only.
+6. Open `/`, `/posts`, `/engagement`, and `/insights`.
+7. Verify owned posts match Threads and Load More works when another cursor is returned.
+8. Verify replies and insights render when permissions are granted; otherwise verify an honest Unsupported state.
+9. Inspect browser network responses and rendered HTML for absence of access tokens, authorization codes, App Secret, and provider authorization headers.
+10. Expire/revoke the token and verify a safe reconnect instruction appears.
+
+## Phase gates
+
+Phase 1 remains dependent on a successful operator-owned real OAuth connection.
+
+Phase 2 implementation passes automated checks only after all tests and production build pass. The final product gate is `BLOCKED` until a real connected account verifies owned posts and any granted reply/insights capabilities in the deployed environment.

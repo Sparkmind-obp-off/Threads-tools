@@ -2,36 +2,34 @@
 
 ## Phase 0 — Foundation
 
-Deliver documentation, repository hygiene, environment contract, and architecture.
+Documentation, repository hygiene, environment contract, and architecture.
 
-**Gate:** implementation can start without ambiguous product boundaries.
+**Status:** implemented.
 
 ## Phase 1 — Connection
 
-Implement OAuth, secure configuration, account status, and safe error handling.
+OAuth, secure server configuration, encrypted token persistence, account status, and safe errors.
 
-**Gate:** real Threads account connects successfully.
+**Gate:** a real Threads account connects successfully in the configured deployment.
 
 ## Phase 2 — Read
 
-Implement account/post retrieval, normalized post views, and available engagement/insights.
+Implemented read-only account identity, owned post retrieval, cursor pagination, top-level reply retrieval when permitted, account/post insights when permitted, normalized models, and explicit capability/error/empty states.
 
-**Gate:** dashboard shows real provider data without raw tester-style payloads.
+**Gate:** the deployed dashboard shows real provider data without raw tester-style payloads and without credential exposure.
+
+**External dependencies:** existing Phase 1 connections must reconnect for Phase 2 scopes. Non-tester/public users require Meta App Review approval and a published app for `threads_read_replies` and `threads_manage_insights`.
 
 ## Phase 3 — Publish
 
-Implement compose, validation, media support where available, creation and publish flow.
+Future scope: compose validation, supported media handling, creation container, and publish flow.
 
-**Gate:** operator can publish a real post from the app.
+**Not implemented in Phase 2.**
 
 ## Phase 4 — Operator polish
 
-Improve filters, post detail, engagement workflows, metrics summaries, loading/error states, and audit visibility.
-
-**Gate:** app is useful as a daily personal-brand operating console.
+Future filters, deeper post detail, engagement workflows, metric comparisons, and safe operational audit visibility.
 
 ## Phase 5 — Future expansion
 
-Only after the Threads tool is stable: separate personal daily activity context, other channels such as Instagram, and demand-intelligence features.
-
-These contexts should remain separate from the professional-brand data model unless intentionally bridged later.
+Only after Threads Tools is stable: separate personal daily-activity context, other channels such as Instagram, and demand-intelligence features. These remain outside the current product boundary.

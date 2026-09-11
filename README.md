@@ -1,66 +1,145 @@
 # Threads Tools
 
-A production-oriented operator console for securely connecting one professional/personal-brand Threads account. This repository is an application foundation—not a raw Threads API tester.
+A small, production-oriented operator console for securely connecting one Threads professional/personal-brand account and reading trustworthy owned-account data. This is an application, not a raw API tester.
 
-## Phase 1 status
+## Current status
+
+### Phase 1 — Connection
 
 Implemented:
 
-- Responsive dashboard and Connection / Settings UI
-- Operator-password authentication with signed, `HttpOnly`, `SameSite=Lax` session cookie
-- Server-side Threads OAuth initiation using cryptographically random, single-use state
-- OAuth callback validation, short-lived token exchange, and long-lived token exchange
-- Minimum account lookup (`id`, `username`, `name`) through a provider adapter
+- Password-protected operator workspace with signed `HttpOnly`, `SameSite=Lax` session cookie
+- Server-side Threads OAuth with cryptographically random, single-use state
+- Short-lived and long-lived token exchange
 - AES-GCM encryption before token persistence in Cloudflare D1
-- Safe normalized connection status and disconnect action
-- Explicit missing-configuration, loading, connected, disconnected, and safe error states
-- Unit tests for critical configuration, OAuth, provider, and secret-boundary paths
+- Safe normalized connection status and disconnect
 
-Not implemented (intentional later phases): posts, publishing, replies/comments, insights, Instagram, automation, or fake/demo provider data.
+### Phase 2 — Read
+
+Implemented:
+
+- Current connected-account profile details supported by Threads
+- Owned Threads post retrieval
+- Stable provider-to-application post/reply/insight normalizers
+- Cursor-based Load More pagination
+- Read-only top-level replies when `threads_read_replies` is granted
+- Account and post insights when `threads_manage_insights` is granted
+- Explicit loading, supported, unsupported, not-configured, empty, reconnect-required, and error states
+- Dashboard, Posts, Engagement, Insights, and Connection/Settings views
+- No fake counters, posts, comments, or demo provider data
+
+Not implemented:
+
+- Phase 3 publishing/compose
+- Reply moderation or automated replies
+- DMs, Instagram, Make.com, bulk engagement, multi-user SaaS, or demand intelligence
 
 ## Architecture
 
 ```text
 Browser UI → Hono server routes → Threads adapter → Meta Threads API
                          ↓
-                Cloudflare D1
-        (state hashes + encrypted token)
+                  Cloudflare D1
+          (state hashes + encrypted token)
 ```
 
-Provider calls are isolated in `src/threads/`. OAuth orchestration is in `src/services/`, session/cryptography in `src/auth/`, and persistence behind interfaces in `src/storage/`. Browser responses use normalized objects and never include authorization codes, app secrets, or access tokens.
+Provider calls live in `src/threads/`, orchestration in `src/services/`, session/cryptography in `src/auth/`, and persistence behind `src/storage/`. The browser consumes allow-listed normalized models only.
+
+## Routes
+
+### Pages
+
+| Method | URI | Purpose |
+|---|---|---|
+| `GET` | `/` | Real-data operator dashboard |
+| `GET` | `/posts` | Owned Threads posts with Load More |
+| `GET` | `/engagement` | Per-post top-level reply reader |
+| `GET` | `/insights` | Account and recent-post insights |
+| `GET` | `/settings` | Connection, reauthorization, and security status |
+
+### Safe application APIs
+
+All connection/read routes require an authenticated operator session.
+
+| Method | URI | Purpose |
+|---|---|---|
+| `GET` | `/api/configuration` | Safe configured/missing state; no values |
+| `GET/POST/DELETE` | `/api/session` | Session status, sign-in, and sign-out |
+| `GET` | `/api/connection/status` | Normalized connection state |
+| `POST` | `/api/connection/disconnect` | Delete encrypted connection credential |
+| `GET` | `/api/read/account` | Current normalized account profile |
+| `GET` | `/api/read/posts?after=&limit=` | Bounded owned-post page |
+| `GET` | `/api/read/posts/:id/replies?after=&limit=` | Bounded top-level reply page/capability state |
+| `GET` | `/api/read/posts/:id/insights` | Supported normalized post metrics |
+| `GET` | `/api/read/insights/account` | Supported normalized account metrics |
+| `GET` | `/auth/threads/start` | OAuth initiation |
+| `GET` | `/auth/threads/callback` | OAuth callback/state validation |
+
+## Current Threads API contract
+
+Verified against Meta official documentation on **2026-09-11**.
+
+Permissions requested:
+
+- `threads_basic`
+- `threads_read_replies`
+- `threads_manage_insights`
+
+No publish or reply-management permission is requested in Phase 2.
+
+Provider endpoints used:
+
+- `GET /v1.0/me` — account identity/profile
+- `GET /v1.0/me/threads` — owned posts and cursor pagination
+- `GET /v1.0/{media-id}/replies` — top-level replies
+- `GET /v1.0/{media-id}/insights` — post metrics (`views`, `likes`, `replies`, `reposts`, `quotes`, `shares`)
+- `GET /v1.0/{user-id}/threads_insights` — account metrics (`views`, `likes`, `replies`, `reposts`, `quotes`, `clicks`, `followers_count`)
+
+Existing Phase 1 connections must reconnect to grant the additional read scopes. Threads testers can grant them during development. Users without an app role require App Review approval for each permission and a published app.
+
+See `docs/04_API_INTEGRATION_CONTRACT.md` for exact fields, metric context, pagination behavior, limitations, and official links.
 
 ## Required environment variables
 
-Copy `.env.example` to `.dev.vars` for local development and supply real values only through uncommitted local configuration or Cloudflare Pages secrets.
+Copy `.env.example` to `.dev.vars` for local development. Never commit `.dev.vars` or real values.
 
 | Variable | Required | Purpose |
 |---|---:|---|
-| `THREADS_APP_ID` | Yes | Threads-specific App ID from Meta App Dashboard |
+| `THREADS_APP_ID` | Yes | Threads-specific App ID |
 | `THREADS_APP_SECRET` | Yes | Threads-specific App Secret; server-only |
-| `THREADS_REDIRECT_URI` | Yes | Exact OAuth callback URL |
+| `THREADS_REDIRECT_URI` | Yes | Exact OAuth callback URI |
 | `THREADS_API_BASE_URL` | No | Defaults to `https://graph.threads.com` |
 | `THREADS_API_VERSION` | No | Defaults to `v1.0` |
-| `SESSION_SECRET` | Yes | At least 32 random characters; signs sessions and derives the token-encryption key |
-| `OPERATOR_PASSWORD` | Yes | Password protecting connection-management routes |
+| `SESSION_SECRET` | Yes | Minimum 32 characters; sessions and token encryption |
+| `OPERATOR_PASSWORD` | Yes | Protects the operator console |
 
-Generate secrets with a cryptographically secure password generator. Do not commit `.dev.vars`, `.env`, tokens, or real credentials.
+Production values must be Cloudflare Pages secrets, not committed configuration.
+
+## Data architecture
+
+Cloudflare D1 stores only:
+
+- `oauth_states`: state hash, expiry, and single-use consumption timestamp
+- `threads_connections`: one account identity, timestamps, and AES-GCM encrypted access token
+
+Posts, replies, and insights are fetched on demand and are not persisted. No access token, refresh token, App Secret, OAuth code, or provider Authorization header is returned to browser APIs or rendered HTML.
 
 ## Local setup
 
-Requirements: Node.js 20+, npm, and Wrangler.
+Requirements: Node.js 20+, npm, Wrangler.
 
 ```bash
 npm install
 cp .env.example .dev.vars
-# Replace placeholders in .dev.vars with local values.
-npx wrangler d1 migrations apply threads-tools-production --local
+# Replace placeholders only in the uncommitted .dev.vars file.
+npm run db:migrate:local
 npm run build
-npx wrangler pages dev dist --d1=threads-tools-production --local --ip 0.0.0.0 --port 3000
+npm run preview
 ```
 
-Open `http://localhost:3000/settings`, sign in with `OPERATOR_PASSWORD`, and select **Connect Threads**.
+Open `http://localhost:3000/settings`, sign in, and connect/reconnect Threads.
 
-Quality commands:
+Quality gate:
 
 ```bash
 npm run typecheck
@@ -68,74 +147,42 @@ npm test
 npm run build
 ```
 
-## Meta / Threads configuration
-
-1. Create or open a Meta developer app and add the **Threads use case**.
-2. Use the Threads-specific App ID and corresponding App Secret (not another Meta product's credentials).
-3. Add the exact redirect URI to the app's valid OAuth redirect URIs:
-   - Local: `http://localhost:3000/auth/threads/callback`
-   - Production: `https://<your-domain>/auth/threads/callback`
-4. Add the real Threads account as a **Threads Tester** and accept the invitation in Threads Website permissions while the app is in development mode.
-5. Phase 1 requests only `threads_basic`. Public users outside app roles require permission approval and a published app.
-
-Meta's documented Phase 1 contract verified on 2026-09-11:
-
-- Authorization: `https://threads.com/oauth/authorize`
-- Code exchange: `POST https://graph.threads.com/oauth/access_token`
-- Long-lived exchange: `GET https://graph.threads.com/access_token`
-- Connected account: `GET https://graph.threads.com/v1.0/me?fields=id,username,name`
-
-Provider endpoints and versions remain configurable through the adapter/environment contract.
-
 ## Real-account verification
 
-1. Configure all server secrets and apply the D1 migration.
-2. Register the exact production callback URL in Meta App Dashboard.
-3. Open `/settings` and sign in.
-4. Select **Connect Threads**, authorize the tester/account at Threads, and return to the callback.
-5. Confirm the UI shows the real account ID, username/display name, connection time, and authorization expiry.
-6. Inspect browser Network responses and verify no `access_token`, app secret, or authorization code is returned.
-7. Select **Disconnect** and confirm status returns to disconnected and the D1 credential row is deleted.
+1. Configure all secrets and apply the D1 migration.
+2. Register the exact local/production callback URI in Meta App Dashboard.
+3. Add the account as a Threads Tester and accept the invitation while the app is in development.
+4. Open `/settings`, sign in, and connect/reconnect.
+5. Grant `threads_basic`, `threads_read_replies`, and `threads_manage_insights`.
+6. Confirm the real account appears on `/`.
+7. Confirm owned posts appear on `/posts` and Load More appears when Meta returns another cursor.
+8. Open `/engagement`, select a post, and verify real top-level replies or an honest Unsupported/Empty state.
+9. Open `/insights` and verify real account/post metrics or an honest Unsupported/Empty state.
+10. Inspect browser responses/HTML and verify credentials are absent.
+11. Revoke/expire the token and verify a reconnect instruction.
 
-The Phase 1 product gate remains **BLOCKED — configuration required** until this real-account flow is completed with operator-owned Meta credentials and provider-side settings.
+## Testing status
 
-## Routes
+Latest implementation gate:
 
-| Method | URI | Purpose |
-|---|---|---|
-| `GET` | `/` | Phase 1 dashboard shell |
-| `GET` | `/settings` | Connection and settings UI |
-| `GET` | `/api/configuration` | Safe configuration capability state; no secret values |
-| `GET` | `/api/session` | Safe operator-session status |
-| `POST` | `/api/session` | Operator sign-in |
-| `DELETE` | `/api/session` | Operator sign-out |
-| `GET` | `/api/connection/status` | Authenticated normalized connection state |
-| `POST` | `/api/connection/disconnect` | Authenticated credential deletion |
-| `GET` | `/auth/threads/start` | Authenticated OAuth initiation |
-| `GET` | `/auth/threads/callback` | Authenticated provider callback and state validation |
+- TypeScript: passing
+- Automated tests: **32 passed / 32**
+- Production build: passing
 
-## Data model
-
-Cloudflare D1 stores:
-
-- `oauth_states`: SHA-256 state hashes, expiry, and single-use consumption timestamp
-- `threads_connections`: one account identity, timestamps, and AES-GCM encrypted access token
-
-Raw tokens are never returned by public APIs. Replacing D1 with another production store requires implementing the `OAuthStateStore` and `ConnectionStore` interfaces.
+Automated tests cover provider success/errors, pagination, replies, insights, expired authorization, normalization, missing optional values, capability states, UI states, and browser credential boundaries.
 
 ## Deployment
 
-Target: Cloudflare Pages with Hono, D1, and server-side Pages secrets.
+Target: Cloudflare Pages + Hono + D1.
 
-Before deployment:
-
-1. Create the production D1 database and replace the placeholder `database_id` in `wrangler.jsonc`.
+1. Create or select the production D1 database and place its non-secret ID in `wrangler.jsonc`.
 2. Apply `migrations/0001_phase1_connection.sql` remotely.
-3. Add every required variable above using `wrangler pages secret put`; do not place values in `wrangler.jsonc`.
-4. Deploy `dist/`, then update `THREADS_REDIRECT_URI` and Meta's valid callback URI to the final HTTPS URL.
+3. Add all required environment values with Cloudflare Pages secrets.
+4. Build and deploy `dist/`.
+5. Update `THREADS_REDIRECT_URI` and Meta's valid OAuth callback to the final HTTPS URL, then reconnect.
 
-## Recommended next steps
+## Gate and next steps
 
-1. Complete real-account OAuth verification and mark the Phase 1 gate PASS.
-2. Add automated token refresh before expiry and safe operational audit events.
-3. Begin Phase 2 only after the connection gate passes.
+The implementation and automated Phase 2 quality gate pass. The product acceptance gate remains **BLOCKED pending real-account verification** until an operator-owned connected account proves real posts and any granted reply/insight capabilities in the deployed environment.
+
+Recommended next action: complete the production OAuth callback/secrets setup, reconnect with Phase 2 scopes, and execute the real-account checklist above. Phase 3 publishing should begin only after that gate passes.

@@ -29,6 +29,10 @@ function provider(overrides: Partial<ThreadsProvider> = {}): ThreadsProvider {
     exchangeCode: vi.fn(async (): Promise<TokenResult> => ({ accessToken: 'short-secret', userId: '42' })),
     exchangeLongLived: vi.fn(async (): Promise<TokenResult> => ({ accessToken: 'long-secret', userId: '42', expiresIn: 3600 })),
     getAccount: vi.fn(async (): Promise<ThreadsAccount> => ({ id: '42', username: 'operator', name: 'Operator' })),
+    listPosts: vi.fn(async () => ({ status: 'empty' as const, items: [] })),
+    listReplies: vi.fn(async () => ({ status: 'empty' as const, items: [] })),
+    getPostInsights: vi.fn(async () => []),
+    getAccountInsights: vi.fn(async () => []),
     ...overrides,
   }
 }

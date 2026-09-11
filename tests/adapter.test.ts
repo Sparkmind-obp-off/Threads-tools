@@ -9,23 +9,68 @@ const config: AppConfig = {
   sessionSecret: 'x'.repeat(32), operatorPassword: 'password',
 }
 
+function response(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
 describe('Meta Threads adapter', () => {
-  it('requests only threads_basic during Phase 1', () => {
+  it('requests only Phase 2 read permissions', () => {
     const url = new URL(new MetaThreadsProvider(config).authorizationUrl('state'))
     expect(url.origin + url.pathname).toBe('https://threads.com/oauth/authorize')
-    expect(url.searchParams.get('scope')).toBe('threads_basic')
+    expect(url.searchParams.get('scope')).toBe('threads_basic,threads_read_replies,threads_manage_insights')
+    expect(url.searchParams.get('scope')).not.toContain('threads_content_publish')
     expect(url.searchParams.get('state')).toBe('state')
   })
 
-  it('normalizes account data and drops unknown sensitive fields', async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ id: '42', username: 'operator', name: 'Operator', access_token: 'must-not-leak' }), { status: 200 })) as unknown as typeof fetch
-    const account = await new MetaThreadsProvider(config, fetcher).getAccount('server-token')
-    expect(account).toEqual({ id: '42', username: 'operator', name: 'Operator' })
+  it('normalizes supported account fields and drops unknown sensitive fields', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ id: '42', username: 'operator', name: 'Operator', threads_biography: 'Bio', is_verified: false, access_token: 'must-not-leak' }))
+    const account = await new MetaThreadsProvider(config, fetcher as unknown as typeof fetch).getAccount('server-token')
+    expect(account).toEqual({ id: '42', username: 'operator', name: 'Operator', biography: 'Bio', isVerified: false })
     expect(account).not.toHaveProperty('access_token')
   })
 
-  it('maps account API errors to a safe application error', async () => {
-    const fetcher = vi.fn(async () => new Response(JSON.stringify({ error: { message: 'raw provider details', code: 190 } }), { status: 401 })) as unknown as typeof fetch
-    await expect(new MetaThreadsProvider(config, fetcher).getAccount('server-token')).rejects.toMatchObject({ code: 'ACCOUNT_LOOKUP_FAILED' })
+  it('reads posts with a bearer token, supported fields, and cursor pagination', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({
+      data: [{ id: '10', text: 'Real post', media_type: 'TEXT_POST', timestamp: '2026-09-11T10:00:00+0000' }],
+      paging: { cursors: { after: 'NEXT_CURSOR' } },
+    }))
+    const result = await new MetaThreadsProvider(config, fetcher as unknown as typeof fetch).listPosts('server-token', 'CURSOR', 12)
+    expect(result).toMatchObject({ status: 'supported', nextCursor: 'NEXT_CURSOR', items: [{ id: '10', text: 'Real post', mediaType: 'TEXT_POST' }] })
+    const [input, init] = fetcher.mock.calls[0]
+    const url = new URL(String(input))
+    expect(url.pathname).toBe('/v1.0/me/threads')
+    expect(url.searchParams.get('after')).toBe('CURSOR')
+    expect(url.searchParams.get('access_token')).toBeNull()
+    expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer server-token')
+  })
+
+  it('reads supported top-level replies', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ data: [{ id: '11', text: 'Reply', username: 'reader', has_replies: true, is_reply: true }] }))
+    const result = await new MetaThreadsProvider(config, fetcher as unknown as typeof fetch).listReplies('server-token', '10')
+    expect(result.items[0]).toMatchObject({ id: '11', text: 'Reply', username: 'reader', hasReplies: true, isReply: true })
+    expect(new URL(String(fetcher.mock.calls[0][0])).pathname).toBe('/v1.0/10/replies')
+  })
+
+  it('reads post and account insight contracts', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ data: [{ name: 'likes', period: 'lifetime', values: [{ value: 7 }] }]}))
+    const provider = new MetaThreadsProvider(config, fetcher as unknown as typeof fetch)
+    expect(await provider.getPostInsights('server-token', '10')).toMatchObject([{ name: 'likes', period: 'lifetime', values: [{ value: 7 }] }])
+    expect(await provider.getAccountInsights('server-token', '42')).toMatchObject([{ name: 'likes' }])
+    expect(new URL(String(fetcher.mock.calls[0][0])).pathname).toBe('/v1.0/10/insights')
+    expect(new URL(String(fetcher.mock.calls[1][0])).pathname).toBe('/v1.0/42/threads_insights')
+  })
+
+  it('normalizes permission and expired-token failures safely', async () => {
+    const denied = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ error: { message: 'raw provider details', code: 10 } }, 403))
+    await expect(new MetaThreadsProvider(config, denied as unknown as typeof fetch).listReplies('secret', '10')).rejects.toMatchObject({ code: 'CAPABILITY_NOT_GRANTED', status: 403 })
+
+    const expired = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ error: { message: 'token text', code: 190 } }, 401))
+    await expect(new MetaThreadsProvider(config, expired as unknown as typeof fetch).getAccount('secret')).rejects.toMatchObject({ code: 'AUTHORIZATION_EXPIRED', status: 401 })
+  })
+
+  it('maps other provider errors without returning raw provider messages', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ error: { message: 'raw provider details', code: 4 } }, 500))
+    await expect(new MetaThreadsProvider(config, fetcher as unknown as typeof fetch).getAccount('server-token')).rejects.toMatchObject({ code: 'ACCOUNT_LOOKUP_FAILED', retryable: true })
+    await expect(new MetaThreadsProvider(config, fetcher as unknown as typeof fetch).getAccount('server-token')).rejects.not.toThrow('raw provider details')
   })
 })
