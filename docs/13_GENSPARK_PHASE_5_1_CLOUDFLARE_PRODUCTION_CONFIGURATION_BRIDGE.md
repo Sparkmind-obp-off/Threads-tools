@@ -6,58 +6,128 @@ You are implementing **Phase 5.1 of Threads Tools** in the existing repository.
 
 This is a **private personal operator tool for one owner**, not a SaaS product.
 
-Phase 5 is already implemented. Do not undo it. Do not redesign Phase 1–4. The purpose of this phase is to make production configuration **actionable** instead of showing `Missing` with no useful next step.
+Phase 5 is already implemented. Do not undo it. Do not redesign Phase 1–4. The purpose of this phase is to turn `/setup` into a real **Production Configuration Center** that can securely bridge owner authorization to Cloudflare Pages Production.
 
 ## PRIMARY MISSION
 
-Implement a secure **Cloudflare Production Configuration Bridge** for `/setup`.
+Implement this real owner flow:
 
-The desired owner experience is:
+`/setup → Connect Cloudflare → Cloudflare consent → OAuth callback → select/confirm owner account + Pages project → enter Threads configuration → Apply Production → Re-check → Connect Threads → Dashboard`
 
-`/setup → connect/authorize Cloudflare configuration capability → enter Threads configuration → securely apply to Production → re-check → Connect Threads → Dashboard`
+This is not a mock flow. Use the real Cloudflare OAuth and Pages API contracts documented by Cloudflare.
 
-The owner must not be forced to manually hunt through Cloudflare settings for every configuration item when a safe automated path is technically available.
+Cloudflare currently supports self-managed OAuth applications using OAuth 2.0 Authorization Code flow. Server-side web apps may use a client secret with `client_secret_basic` or `client_secret_post`; PKCE is optional for this server-side flow. Cloudflare OAuth applications can be private, in which case they can only be authorized by members of the parent Cloudflare account. This project is intentionally private/personal, so keep the OAuth client private unless a later product requirement explicitly changes. 
+
+Cloudflare Pages project update supports modifying environment variables and requires the `Pages Write` permission. Pages environment configuration supports `plain_text` and encrypted `secret_text`, with `production` as a target environment. 
+
+## VERIFIED CLOUDFLARE CONTRACT — DO NOT GUESS
+
+The implementation must use the current official Cloudflare documentation as the source of truth.
+
+Verified facts:
+
+1. Cloudflare supports self-managed OAuth clients.
+2. Supported third-party OAuth grant: Authorization Code.
+3. Server-side web app/backend flow is supported.
+4. Private OAuth clients can be authorized by members of the parent Cloudflare account.
+5. OAuth client configuration includes:
+   - client name
+   - response type
+   - grant type
+   - token authentication method
+   - redirect URLs
+   - scopes
+6. OAuth scopes correspond to Cloudflare API token permission concepts.
+7. Cloudflare Pages project update endpoint is:
+   `PATCH /accounts/{account_id}/pages/projects/{project_name}`
+8. Pages project update accepts `env_vars`.
+9. Environment variables support:
+   - `plain_text`
+   - `secret_text`
+10. Production configuration is explicitly represented as `environment: production`.
+11. Pages project update requires `Pages Write` permission.
+
+Do NOT invent OAuth endpoint paths, scope identifiers, token exchange payloads, or Pages payloads. Read/implement against the current Cloudflare API contract.
+
+## IMPORTANT OWNER BOOTSTRAP
+
+There is one unavoidable bootstrap action outside Genspark:
+
+The owner must create the Cloudflare OAuth client in the Cloudflare Dashboard:
+
+`Manage Account → OAuth clients → Create client`
+
+The owner must configure:
+
+- private OAuth client
+- Authorization Code grant
+- secure server-side token authentication
+- exact production callback URL from this application
+- minimum required scopes, including the permission required to update Pages Production
+
+The Cloudflare OAuth client secret must be stored as a server-side production secret. NEVER put it in GitHub, frontend code, browser storage, D1, logs, or chat prompts.
+
+Genspark must build the application code that uses this client. Genspark does NOT receive or manage the owner's Cloudflare OAuth client secret.
 
 ## CRITICAL SECURITY PRINCIPLE
 
-The bridge must NEVER expose or persist Cloudflare API credentials or Threads secrets in browser storage, HTML, client JavaScript, D1, logs, audit records, GitHub, query parameters, or normal API responses.
+The bridge must NEVER expose or persist Cloudflare OAuth client secrets, Cloudflare OAuth access/refresh credentials, Cloudflare API tokens, or Threads secrets in browser storage, HTML, client JavaScript, D1, logs, audit records, GitHub, query parameters, or normal API responses.
 
 Do NOT create an unauthenticated endpoint that can modify the Cloudflare project.
 
 Do NOT embed a Cloudflare API token in the application bundle.
 
-Do NOT store a Cloudflare API token in localStorage, sessionStorage, cookies accessible to JavaScript, URL parameters, or D1.
+Do NOT ask the owner to paste a Cloudflare API token into `/setup`.
+
+Do NOT store Cloudflare API tokens in D1.
 
 Do NOT store `THREADS_APP_SECRET` in D1 merely to make setup easier.
 
 Do NOT weaken existing OAuth/session security.
 
-## IMPORTANT IMPLEMENTATION DECISION
+## OWNER AUTHORIZATION MODEL
 
-The bridge may automate Cloudflare configuration only if there is a secure owner authorization mechanism.
+The configuration bridge must be owner-only.
 
-Preferred design:
+Required sequence:
 
-1. `/setup` has a clear **Connect Cloudflare** / **Authorize Cloudflare** step.
-2. The owner authorizes the Cloudflare account/project through a supported secure mechanism, preferably OAuth or another server-side authorization flow if Cloudflare provides the required capability for this use case.
-3. The resulting authorization is handled server-side and stored only in the minimum secure form required.
-4. `/setup` can then call the Cloudflare API server-side to configure the selected Pages project/environment.
+1. User must already satisfy the existing Threads Tools owner/session boundary.
+2. User clicks `Connect Cloudflare`.
+3. Backend generates an OAuth authorization request with a cryptographically strong state value.
+4. Browser is redirected to Cloudflare's official authorization endpoint.
+5. Owner signs in / confirms the Cloudflare account if necessary.
+6. Cloudflare displays requested scopes/consent.
+7. Owner authorizes.
+8. Cloudflare redirects to the exact backend callback URL with an authorization code and state.
+9. Backend validates state.
+10. Backend exchanges the authorization code for Cloudflare OAuth access credentials using the server-side OAuth client credentials.
+11. Backend stores only the minimum credential material required, encrypted/server-side according to the existing secret model.
+12. Browser receives only safe connection status.
 
-If a safe Cloudflare authorization flow cannot be implemented with the currently available Cloudflare APIs, **do not invent one** and do not accept a raw API token through an unauthenticated/public form.
+Never put the authorization code or Cloudflare OAuth access credentials into the frontend application state beyond what is inherently required for the redirect.
 
-In that case, implement a secure guided fallback:
+## ACCOUNT / PROJECT DISCOVERY
 
-- `/setup` clearly explains exactly what must be configured in Cloudflare;
-- shows the exact variable/secret names;
-- provides copy buttons for safe values such as Redirect URI;
-- provides a `Re-check Configuration` action;
-- clearly distinguishes what can be automated from what requires one-time owner action.
+After successful Cloudflare authorization, the backend must discover the accounts/resources available to the authorized principal using official Cloudflare APIs.
 
-The fallback must still be substantially better than a bare `Missing` label.
+The UI must not ask the user to type an arbitrary account ID if the authorized Cloudflare API can discover the account.
+
+For Pages configuration:
+
+1. Discover authorized account(s).
+2. Discover Pages project(s) under the authorized account.
+3. If exactly one suitable Pages project exists, preselect it.
+4. If multiple projects exist, show a safe project selector containing names/status only.
+5. Persist only the selected non-secret account/project identifiers needed to perform the operation.
+6. Before writing configuration, verify that the selected project belongs to the authorized account.
+
+Do not trust arbitrary account/project identifiers supplied by the browser without server-side authorization checks.
 
 ## CONFIGURATION TARGET
 
-The Production configuration model should account for the existing Threads Tools environment variables, including as applicable:
+Use the repository's existing environment contract as the source of truth. Do not invent duplicate variable names.
+
+Expected configuration includes as applicable:
 
 - `THREADS_APP_ID`
 - `THREADS_APP_SECRET`
@@ -65,27 +135,41 @@ The Production configuration model should account for the existing Threads Tools
 - `THREADS_API_BASE_URL`
 - existing session/token-encryption secret required by the application
 
-Use the repository's existing environment contract as the source of truth. Do not invent duplicate variable names.
+Classify values correctly:
 
-### Classification
-
-Safe non-secret configuration may use normal environment variables where appropriate.
-
-Sensitive values must use Cloudflare encrypted secret configuration (`secret_text`) when managed through the Cloudflare API.
+- safe/non-secret configuration → `plain_text` where appropriate
+- sensitive configuration → `secret_text`
 
 At minimum:
 
 - `THREADS_APP_SECRET` → secret
 - session/token-encryption secret → secret
-- Cloudflare authorization credential, if any → secret
+- Cloudflare OAuth client secret → server-side secret
+- Cloudflare OAuth access/refresh credential → server-side secret
 
 Never echo secret values back to the browser after saving.
 
 ## `/setup` UX
 
-Replace the unhelpful configuration state with an actionable production setup center.
+Replace the old unhelpful `Configured/Missing` screen with an actionable Production Configuration Center.
 
-The owner should see something conceptually like:
+Conceptually:
+
+### Cloudflare Connection
+
+`Not connected`
+
+`[ Connect Cloudflare ]`
+
+After authorization:
+
+`Connected`
+
+`Account: ••••safe identifier`
+
+`Pages project: threads-tools`
+
+`[ Change project ]`
 
 ### Production Configuration
 
@@ -94,71 +178,111 @@ The owner should see something conceptually like:
 - Redirect URI — Configured / Missing
 - API Base URL — Configured / Missing
 - Session/token encryption secret — Configured / Missing
-- Cloudflare configuration bridge — Connected / Not connected / Manual setup required
 
-For every missing item, provide a clear next action.
-
-Examples:
+Actions:
 
 - `Configure automatically`
-- `Connect Cloudflare`
 - `Copy Redirect URI`
-- `How to configure in Cloudflare`
 - `Re-check Configuration`
 
-Do not show secret values.
+Never show secret values.
 
 ## AUTOMATED CONFIGURATION FLOW
 
-If secure Cloudflare authorization is available:
+After Cloudflare OAuth is connected:
 
 1. Owner opens `/setup`.
-2. Owner selects **Connect Cloudflare**.
-3. Owner completes the supported authorization flow.
-4. Server establishes the minimum required Cloudflare capability.
-5. Owner enters Threads App ID and App Secret through the secure setup UI.
-6. Server validates input shape without logging secret values.
-7. Server writes the correct Production Pages variables/secrets through the Cloudflare API.
-8. Secret values are sent only server-to-server.
-9. Server returns only normalized safe status.
-10. `/setup` performs a fresh configuration check.
-11. When ready, show **Connect Threads**.
+2. Owner clicks `Connect Cloudflare`.
+3. Real Cloudflare OAuth Authorization Code flow runs.
+4. Backend validates callback state and exchanges the code server-side.
+5. Backend discovers authorized account(s).
+6. Backend discovers Pages projects.
+7. Owner confirms `threads-tools` or selects the intended Pages project.
+8. Owner enters Threads App ID and App Secret through the secure setup UI.
+9. Backend validates input shape without logging values.
+10. Backend constructs the exact Pages Production `env_vars` payload.
+11. Non-secret values use `plain_text`.
+12. Sensitive values use `secret_text`.
+13. Backend calls the official Pages project update API with the Cloudflare OAuth access credential.
+14. Backend targets the `production` environment explicitly.
+15. Backend returns only normalized safe status.
+16. `/setup` performs a fresh configuration check.
+17. When all required values are ready, show `Connect Threads`.
+18. Existing Threads OAuth flow remains unchanged.
 
-Do not require a redeploy if the Cloudflare API supports changing the relevant environment bindings without one. If a deployment/redeploy is required by the platform, represent that state honestly and provide the appropriate next action.
+Do not fake success merely because the API request returned HTTP success. Re-read the project configuration using the official API and verify safe presence/type/status where possible.
+
+If Cloudflare requires deployment/redeployment before a changed environment value is active at runtime, represent that state honestly and provide the required next action.
+
+## PERSISTENCE MODEL
+
+Do not store raw OAuth credentials in D1 unless the existing security architecture explicitly supports encrypted credential storage and it is genuinely required.
+
+Prefer the platform's server-side secret/environment storage for application bootstrap secrets.
+
+For OAuth access credentials needed after the callback, use the minimum secure server-side persistence supported by the existing architecture. Encrypt at rest if persistent storage is required.
+
+Never store credential material in audit logs.
 
 ## MANUAL FALLBACK
 
-If automation cannot safely be completed:
+If the external OAuth client bootstrap has not yet been configured, `/setup` must show a clear bootstrap state instead of pretending the bridge is broken.
 
-Show an explicit one-time checklist:
+Example:
 
-1. Open Cloudflare project `threads-tools`.
-2. Open Production Variables/Secrets.
-3. Add the exact variables from the repository's environment contract.
-4. Store sensitive values as encrypted Secrets.
-5. Save/deploy as required.
-6. Return to `/setup`.
-7. Click **Re-check Configuration**.
-8. Continue to **Connect Threads** when all required values are configured.
+`Cloudflare OAuth client: Not configured`
 
-The UI should make this a recovery path, not the only unexplained instruction.
+`Action: Create a private Cloudflare OAuth client and add the callback URL below.`
 
-## CLOUDFLARE API REQUIREMENTS
+Provide:
 
-Before implementation, verify the current official Cloudflare API contract for Pages environment variables/secrets.
+- exact callback URL
+- required grant type
+- required token authentication method
+- minimum required scope guidance
+- exact production secret names that must exist server-side
+- `Re-check Cloudflare OAuth` action
 
-Use the supported API semantics for:
+Do NOT ask the user to paste a Cloudflare API token into the public UI.
 
-- Pages project identification
-- Production environment configuration
-- plain-text variables
-- encrypted `secret_text` variables
-- update/replace behavior
-- required permissions
+If automatic configuration is temporarily unavailable, the existing manual Cloudflare Variables/Secrets path remains available as a safe recovery route.
 
-Do not guess endpoint paths, payload shapes, OAuth scopes, or permission names.
+## CLOUDFLARE API ADAPTER
 
-If the current Cloudflare API does not support the required owner authorization flow, stop at the secure manual fallback rather than inventing an insecure mechanism.
+Create a dedicated server-side adapter/service for Cloudflare operations.
+
+It should isolate:
+
+- OAuth authorization URL construction
+- callback code exchange
+- token handling
+- account discovery
+- Pages project discovery
+- Pages project read
+- Pages Production update
+- configuration verification
+- error normalization
+
+The frontend must never call Cloudflare APIs directly.
+
+The frontend must call only authenticated Threads Tools server routes.
+
+The server must enforce owner authorization on every configuration mutation.
+
+## IDEMPOTENCY / SAFE UPDATE
+
+`Configure automatically` must be safe to repeat.
+
+Before writing:
+
+1. Read current Pages project configuration.
+2. Preserve unrelated environment variables/configuration.
+3. Merge only the variables owned by Threads Tools.
+4. Update Production only.
+5. Do not overwrite Preview unless explicitly required by the existing product contract.
+6. Re-read after write.
+
+Never replace the entire project configuration with a minimal object if doing so could remove unrelated bindings/settings.
 
 ## SECRET HANDLING
 
@@ -168,26 +292,18 @@ Never:
 - put App Secret in query string
 - return App Secret from API
 - put App Secret in localStorage/sessionStorage
-- put App Secret in D1
+- put App Secret in D1 as plaintext
 - put App Secret in audit events
 - log App Secret
 - put App Secret in GitHub
 - display App Secret after save
+- include Cloudflare OAuth client secret in frontend code
+- include Cloudflare OAuth access/refresh credentials in frontend code
 - include Cloudflare API token in frontend code
 
-Input fields may use password-style controls, but the browser must transmit sensitive values only to the intended authenticated server-side setup endpoint.
+Password-style input is acceptable for sensitive fields. Sensitive values may travel from browser to the authenticated setup endpoint, then must remain server-side.
 
 After successful persistence, clear sensitive input state where practical.
-
-## OWNER AUTHORIZATION
-
-Because this is a private personal operator tool, the Cloudflare configuration bridge must be owner-only.
-
-Do not solve this with the old mystery operator password.
-
-If Cloudflare Access is available/recommended as deployment-level protection, document it as the appropriate private-access layer.
-
-Do not expose a powerful Cloudflare configuration endpoint publicly without an owner authorization boundary.
 
 ## PRESERVE EXISTING PRODUCT
 
@@ -199,13 +315,12 @@ Do not break:
 - Engagement
 - Insights
 - Compose/publish
-- OAuth
+- Threads OAuth
 - Settings
 - D1 audit visibility
 - existing connection/configuration checks
 - existing security model
-- Phase 1–4 behavior
-- Phase 5 onboarding
+- Phase 1–5 behavior
 
 Do not add:
 
@@ -226,20 +341,31 @@ Do not add:
 
 Add tests for:
 
-1. setup configuration status;
-2. owner authorization requirement;
-3. unauthenticated configuration attempts rejected;
-4. safe configuration values accepted;
-5. secret values never returned;
-6. secret values never logged/audited;
-7. Cloudflare API adapter payload normalization;
-8. plain-text vs secret-text classification;
-9. production environment targeting;
-10. Cloudflare API failure handling;
-11. invalid/expired Cloudflare authorization;
-12. manual fallback state;
-13. re-check configuration;
-14. Phase 1–5 regression.
+1. `/setup` configuration status;
+2. Cloudflare OAuth authorization URL generation;
+3. OAuth state generation/validation;
+4. callback rejects invalid state;
+5. callback rejects missing/invalid code;
+6. server-side token exchange;
+7. OAuth credential redaction;
+8. owner authorization requirement;
+9. unauthenticated configuration attempts rejected;
+10. account discovery;
+11. Pages project discovery;
+12. project ownership/account boundary;
+13. safe configuration values accepted;
+14. secret values never returned;
+15. secret values never logged/audited;
+16. Pages API adapter payload normalization;
+17. `plain_text` vs `secret_text` classification;
+18. explicit Production targeting;
+19. preservation of unrelated environment configuration;
+20. idempotent repeated configuration;
+21. Cloudflare API failure handling;
+22. expired/invalid OAuth credential handling;
+23. manual bootstrap fallback state;
+24. re-check configuration;
+25. Phase 1–5 regression.
 
 Run:
 
@@ -249,44 +375,74 @@ Run:
 - route smoke tests
 - security regression checks
 
+## REAL PRODUCTION VERIFICATION
+
+Do not claim end-to-end PASS from unit tests alone.
+
+When the code is deployed, verify the real flow using a real owner Cloudflare account and the real `threads-tools` Pages project:
+
+1. Open production `/setup`.
+2. Connect Cloudflare.
+3. Complete Cloudflare consent.
+4. Verify callback succeeds.
+5. Verify authorized account/project discovery.
+6. Enter real Threads configuration.
+7. Apply Production configuration.
+8. Re-check configuration.
+9. Verify the required safe status becomes configured.
+10. Verify no secret value appears in UI/network response/log/audit output.
+11. Connect Threads.
+12. Verify existing dashboard functionality.
+
+Never fabricate this verification. If the real owner OAuth client or production secrets have not been configured, report the exact blocker and mark the gate `BLOCKED`.
+
 ## DOCUMENTATION
 
-Update the relevant README/setup/security documentation.
+Update relevant README/setup/security documentation.
 
-Clearly explain:
+Document:
 
-- `/setup` is the Production Configuration Center;
-- automatic Cloudflare configuration requires secure owner authorization;
-- secrets are never exposed to the browser after saving;
-- if automation is unavailable, the UI provides an explicit manual Cloudflare fallback;
-- there is still no mystery in-app operator password.
+- `/setup` is now the Production Configuration Center;
+- Cloudflare uses the official self-managed OAuth Authorization Code flow;
+- the OAuth client is private for this personal tool;
+- owner authorization is required before Pages configuration writes;
+- Genspark only implements code and never receives the owner's Cloudflare OAuth client secret;
+- Threads secrets never return to the browser after saving;
+- manual bootstrap/fallback exists when the OAuth client itself has not yet been created;
+- no mystery in-app operator password exists.
 
 ## ACCEPTANCE CRITERIA
 
 Phase 5.1 is complete only when:
 
-- `/setup` no longer leaves the owner with unexplained `Missing` states;
-- every missing production configuration item has an actionable next step;
-- a secure Cloudflare bridge is implemented if the current official Cloudflare contract supports it;
-- otherwise the manual fallback is clear and complete;
-- Cloudflare Production variables/secrets use correct types;
-- Threads App Secret is treated as a secret;
+- `/setup` is an actual actionable Production Configuration Center;
+- `Connect Cloudflare` launches the real Cloudflare OAuth Authorization Code flow;
+- callback state is validated;
+- OAuth code exchange occurs server-side;
+- Cloudflare OAuth credentials never reach the browser after exchange;
+- authorized Cloudflare account/project discovery works;
 - owner authorization is mandatory for configuration writes;
+- Pages Production update uses the official API;
+- `Pages Write` capability is actually sufficient for the update operation;
+- secret values are sent server-to-server and classified as `secret_text` where appropriate;
+- unrelated project configuration is preserved;
+- repeated configuration is safe/idempotent;
 - no public unauthenticated configuration-write endpoint exists;
 - no secret appears in browser responses/storage/logs/audit/GitHub;
-- re-check accurately reports the resulting state;
+- re-check accurately reports resulting state;
 - existing Threads OAuth and Phase 1–5 functionality remains intact;
-- tests, typecheck, and production build pass.
+- tests, typecheck, and production build pass;
+- real production verification is either completed or explicitly reported as blocked.
 
 ## PHASE 5.1 GATE
 
 ### PASS
 
-Only if the secure automated bridge works end-to-end OR the repository has a complete, explicit, secure manual fallback because the official Cloudflare authorization contract does not permit safe in-app automation.
+Only if the implementation is real, tests pass, and the production verification described above succeeds.
 
 ### BLOCKED
 
-If an external Cloudflare capability is genuinely required and cannot be implemented or safely substituted without weakening security.
+If the code is complete but the external owner bootstrap, OAuth client, production secret configuration, or real Cloudflare authorization has not yet been performed, or if Cloudflare prevents the required operation under the authorized scopes.
 
 Never fake a PASS.
 
@@ -297,7 +453,7 @@ Return exactly:
 ## 1. IMPLEMENTED
 ## 2. FILES / MODULES CHANGED
 ## 3. CLOUDFLARE API CONTRACT USED
-## 4. PRODUCTION CONFIGURATION FLOW
+## 4. OAUTH / PRODUCTION CONFIGURATION FLOW
 ## 5. SECURITY CHECK
 ## 6. TESTS / TYPECHECK / BUILD
 ## 7. REAL PRODUCTION VERIFICATION
@@ -316,4 +472,4 @@ or
 
 **GAS PHASE 5.1 ONLY.**
 
-Turn `/setup` into a real Production Configuration Center. Prefer a secure Cloudflare configuration bridge when officially supported. Otherwise provide a precise secure fallback. Never expose secrets, never create an unauthenticated Cloudflare configuration endpoint, preserve Phase 1–5, test everything, and stop.
+Upgrade `/setup` into the real Cloudflare Production Configuration Center. Implement the official Cloudflare OAuth Authorization Code bridge server-side, discover the authorized account/project, write only Threads Tools-owned Production configuration through the official Pages API, preserve unrelated settings, protect every credential, test everything, and perform real production verification when external owner bootstrap is available. Do not fake success.
