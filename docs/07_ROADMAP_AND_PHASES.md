@@ -32,7 +32,11 @@ Implemented: authenticated Compose UI, current 500 UTF-8-byte text validation, f
 
 ## Phase 4 — Operator polish
 
-Future filters, deeper post detail, engagement workflows, metric comparisons, and safe operational audit visibility.
+Implemented: operator-health dashboard, bounded loaded-post search and chronological sort, real post detail, selected-post engagement context, supported 7/14/30-day account metric comparison, consistent capability/reauthorization states, and D1-backed safe operational audit visibility.
+
+**Gate:** automated tests, typecheck, migration, and build must pass, then a deployed real connected Threads account must verify dashboard data, post detail, engagement, ranged insights, activity events, and preserved publishing. Without production credentials/account access, the implementation can be complete while the product gate remains `BLOCKED`.
+
+**External dependencies:** production Threads configuration, current OAuth grants, applicable App Review/tester access, provider availability, and a real account with data needed to verify each supported state.
 
 ## Phase 5 — Future expansion
 

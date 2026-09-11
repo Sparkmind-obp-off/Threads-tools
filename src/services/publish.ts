@@ -1,6 +1,6 @@
 import { sha256 } from '../auth/crypto'
 import { AppError, type PublishInput, type PublishResult } from '../domain/types'
-import type { CredentialStore, PublishRequestStore } from '../storage/repositories'
+import type { AuditStore, CredentialStore, PublishRequestStore } from '../storage/repositories'
 import type { ThreadsProvider } from '../threads/adapter'
 
 export const THREADS_TEXT_MAX_BYTES = 500
@@ -34,6 +34,7 @@ export class ThreadsPublishService {
     private readonly provider: ThreadsProvider,
     private readonly credentials: CredentialStore,
     private readonly requests: PublishRequestStore,
+    private readonly audit?: AuditStore,
   ) {}
 
   async publish(value: unknown): Promise<PublishResult> {
@@ -48,12 +49,14 @@ export class ThreadsPublishService {
     if (claim.state !== 'claimed') {
       throw new AppError('DUPLICATE_REQUEST', 'This publish request was already used. Review the result before starting a new publish.', 409)
     }
+    await this.audit?.record('publish_attempt', 'started').catch(() => undefined)
 
     let containerId: string
     try {
       containerId = await this.provider.createTextContainer(credential.accessToken, credential.accountId, input.text)
     } catch (error) {
       await this.requests.markFailed(input.requestId)
+      await this.audit?.record('publish_failed', 'failure', undefined, error instanceof AppError ? error.code : 'CONTAINER_CREATION_FAILED').catch(() => undefined)
       if (error instanceof AppError) throw error
       throw new AppError('CONTAINER_CREATION_FAILED', 'Threads could not prepare this post. No publish retry was attempted automatically.', 502, true)
     }
@@ -67,8 +70,10 @@ export class ThreadsPublishService {
       )
       if (definiteRejection) {
         await this.requests.markFailed(input.requestId)
+        await this.audit?.record('publish_failed', 'failure', undefined, error.code).catch(() => undefined)
         throw error
       }
+      await this.audit?.record('publish_failed', 'failure', undefined, 'PUBLISH_RESULT_UNCERTAIN').catch(() => undefined)
       throw new AppError('PUBLISH_RESULT_UNCERTAIN', 'Threads did not return a conclusive publish result. Do not publish again automatically; check Posts first.', 503, false)
     }
 
@@ -81,6 +86,7 @@ export class ThreadsPublishService {
 
     try {
       await this.requests.markPublished(input.requestId, result)
+      await this.audit?.record('publish_succeeded', 'success', postId).catch(() => undefined)
     } catch {
       throw new AppError('PUBLISH_RESULT_UNCERTAIN', 'Threads published the post, but the application could not persist the result. Check Posts before trying again.', 503, false)
     }

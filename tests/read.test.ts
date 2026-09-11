@@ -16,6 +16,8 @@ function provider(overrides: Partial<ThreadsProvider> = {}): ThreadsProvider {
     listReplies: vi.fn(async () => ({ status: 'empty', items: [] })),
     getPostInsights: vi.fn(async () => [{ name: 'likes', total: 2 }]),
     getAccountInsights: vi.fn(async () => [{ name: 'followers_count', total: 100 }]),
+    getAccountInsightsRange: vi.fn(async () => [{ name: 'likes', total: 5 }]),
+    getPost: vi.fn(async () => ({ id: '10', text: 'Post' })),
     ...overrides,
   } as ThreadsProvider
 }
@@ -29,6 +31,13 @@ describe('Threads read service', () => {
     expect(await service.account()).toEqual({ id: '42', username: 'operator' })
     expect(await service.posts('CURSOR', 12)).toMatchObject({ nextCursor: 'NEXT', items: [{ id: '10' }] })
     expect(api.listPosts).toHaveBeenCalledWith('server-token', 'CURSOR', 12)
+  })
+
+  it('reads a single normalized post for detail views', async () => {
+    const api = provider()
+    const service = new ThreadsReadService(api, credentials(validCredential))
+    expect(await service.post('10')).toEqual({ id: '10', text: 'Post' })
+    expect(api.getPost).toHaveBeenCalledWith('server-token', '10')
   })
 
   it('returns explicit supported and empty capability states', async () => {
@@ -46,7 +55,23 @@ describe('Threads read service', () => {
     await expect(new ThreadsReadService(provider(), credentials(null)).posts()).rejects.toMatchObject({ code: 'NOT_CONNECTED' })
     await expect(new ThreadsReadService(provider(), credentials({ accountId: '42', accessToken: '' })).posts()).rejects.toMatchObject({ code: 'AUTHORIZATION_EXPIRED' })
     const service = new ThreadsReadService(provider({ getAccountInsights: vi.fn(async () => { throw new AppError('AUTHORIZATION_EXPIRED', 'Reconnect.', 401) }) }), credentials(validCredential))
-    expect(await service.accountInsights()).toMatchObject({ status: 'error', reauthorizationRequired: true })
+    expect(await service.accountInsights()).toMatchObject({ status: 'reauthorization_required', reauthorizationRequired: true })
+  })
+
+  it('compares only provider-returned ranged metrics across valid periods', async () => {
+    const range = vi.fn()
+      .mockResolvedValueOnce([{ name: 'likes', total: 8 }])
+      .mockResolvedValueOnce([{ name: 'likes', total: 5 }])
+    const service = new ThreadsReadService(provider({ getAccountInsightsRange: range }), credentials(validCredential))
+    const result = await service.accountInsightsComparison(7, new Date('2026-09-11T00:00:00Z'))
+    expect(result).toMatchObject({ status: 'supported', data: { days: 7, current: { metrics: [{ name: 'likes', total: 8 }] }, previous: { metrics: [{ name: 'likes', total: 5 }] } } })
+    expect(range).toHaveBeenCalledTimes(2)
+    await expect(service.accountInsightsComparison(1)).rejects.toMatchObject({ code: 'INVALID_PERIOD' })
+  })
+
+  it('preserves unavailable comparison metrics as absent', async () => {
+    const service = new ThreadsReadService(provider({ getAccountInsightsRange: vi.fn(async () => []) }), credentials(validCredential))
+    expect(await service.accountInsightsComparison(7)).toMatchObject({ status: 'empty' })
   })
 
   it('rejects invalid media IDs and oversized cursors before provider calls', async () => {

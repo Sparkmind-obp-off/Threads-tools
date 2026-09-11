@@ -2,10 +2,10 @@ import { describe, expect, it } from 'vitest'
 import { readFile } from 'node:fs/promises'
 import app from '../src/index'
 
-describe('Phase 3 UI and browser security boundary', () => {
+describe('Phase 4 UI and browser security boundary', () => {
   it.each([
-    ['/', 'Recent posts'], ['/posts', 'Your Threads posts'], ['/engagement', 'Top-level replies'],
-    ['/compose', 'Create a Thread'], ['/insights', 'Account insights'], ['/settings', 'Connection status'],
+    ['/', 'Recent posts'], ['/posts', 'Your Threads posts'], ['/posts/10', 'Post insights'], ['/engagement', 'Top-level replies'],
+    ['/compose', 'Create a Thread'], ['/insights', 'Account metric comparison'], ['/activity', 'Recent activity'], ['/settings', 'Connection status'],
   ])('renders the real-data workspace shell for %s', async (path, label) => {
     const response = await app.request(path)
     const html = await response.text()
@@ -34,6 +34,27 @@ describe('Phase 3 UI and browser security boundary', () => {
     expect(script).toContain('Connect Threads before publishing')
   })
 
+  it('contains bounded post search, sorting, detail, contextual engagement, comparisons, and audit states', async () => {
+    const html = async (path: string) => (await app.request(path)).text()
+    const [posts, detail, engagement, insights, activity, script] = await Promise.all([
+      html('/posts'),
+      html('/posts/10'),
+      html('/engagement'),
+      html('/insights'),
+      html('/activity'),
+      readFile(new URL('../public/static/app.js', import.meta.url), 'utf8'),
+    ])
+    expect(posts).toContain('Search loaded post text')
+    expect(posts).toContain('Newest first')
+    expect(detail).toContain('Post detail')
+    expect(engagement).toContain('selected-post-context')
+    expect(insights).toContain('Period comparison')
+    expect(activity).toContain('Credentials, provider payloads, and post text are never recorded')
+    expect(script).toContain('Filtering')
+    expect(script).toContain('followers_count')
+    expect(script).toContain('reauthorization_required')
+  })
+
   it('contains loading, empty, unsupported, error, and pagination UI states', async () => {
     const script = await readFile(new URL('../public/static/app.js', import.meta.url), 'utf8')
     expect(script).toContain('skeleton-lines')
@@ -57,5 +78,7 @@ describe('Phase 3 UI and browser security boundary', () => {
     expect(assets).not.toContain('access_token')
     expect(assets).not.toContain('refresh_token')
     expect(assets).not.toContain('oauth code')
+    expect(assets).not.toContain('encrypted_access_token')
+    expect(assets).not.toContain('result_json')
   })
 })

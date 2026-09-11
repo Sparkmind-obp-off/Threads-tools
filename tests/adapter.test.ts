@@ -102,6 +102,18 @@ describe('Meta Threads adapter', () => {
     expect(new URL(String(fetcher.mock.calls[1][0])).pathname).toBe('/v1.0/42/threads_insights')
   })
 
+  it('requests bounded account insight periods without followers_count', async () => {
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ data: [{ name: 'likes', total_value: { value: 7 } }] }))
+    const provider = new MetaThreadsProvider(config, fetcher as unknown as typeof fetch)
+    expect(await provider.getAccountInsightsRange('server-token', '42', 1788739200, 1789344000)).toMatchObject([{ name: 'likes', total: 7 }])
+    const url = new URL(String(fetcher.mock.calls[0][0]))
+    expect(url.pathname).toBe('/v1.0/42/threads_insights')
+    expect(url.searchParams.get('metric')).not.toContain('followers_count')
+    expect(url.searchParams.get('since')).toBe('1788739200')
+    expect(url.searchParams.get('until')).toBe('1789344000')
+    expect(url.searchParams.get('access_token')).toBeNull()
+  })
+
   it('normalizes permission and expired-token failures safely', async () => {
     const denied = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ error: { message: 'raw provider details', code: 10 } }, 403))
     await expect(new MetaThreadsProvider(config, denied as unknown as typeof fetch).listReplies('secret', '10')).rejects.toMatchObject({ code: 'CAPABILITY_NOT_GRANTED', status: 403 })

@@ -39,6 +39,18 @@ Implemented:
 - Honest text-only media capability state; no fake local-file upload
 - Safe reconnect, permission, rate-limit, provider, validation, container, publish, and uncertain-result handling
 
+### Phase 4 — Operator Polish
+
+Implemented:
+
+- Dashboard connection/configuration health, fast compose/navigation actions, real recent posts, latest-post replies, and available insights
+- Bounded local search and chronological sort over provider pages already loaded on `/posts`
+- Real post detail with verified permalink-only action, media metadata, available insights, and top-level replies
+- Contextual engagement selection with honest top-level-only limitation and capability states
+- 7/14/30-day account insight comparisons using Meta-supported `since`/`until` queries; `followers_count` is excluded from comparisons
+- Safe D1-backed operational activity for connection and publishing events, with bounded cursor pagination and no content/credential payloads
+- Consistent empty, unsupported, error, and reauthorization-required states
+
 Not implemented:
 
 - Image, video, or carousel publishing (public media hosting/processing is not configured)
@@ -63,10 +75,12 @@ Provider calls live in `src/threads/`, orchestration in `src/services/`, session
 | Method | URI | Purpose |
 |---|---|---|
 | `GET` | `/` | Real-data operator dashboard |
-| `GET` | `/posts` | Owned Threads posts with Load More |
+| `GET` | `/posts` | Owned Threads posts with bounded local search/sort and Load More |
+| `GET` | `/posts/:id` | Real post detail, available metrics, and top-level reply context |
 | `GET` | `/compose` | Validate, preview, and explicitly publish a real text post |
 | `GET` | `/engagement` | Per-post top-level reply reader |
-| `GET` | `/insights` | Account and recent-post insights |
+| `GET` | `/insights` | Account/current post insights and supported period comparison |
+| `GET` | `/activity` | Safe connection/publish operational history |
 | `GET` | `/settings` | Connection, reauthorization, and security status |
 
 ### Safe application APIs
@@ -81,9 +95,12 @@ All connection/read routes require an authenticated operator session.
 | `POST` | `/api/connection/disconnect` | Delete encrypted connection credential |
 | `GET` | `/api/read/account` | Current normalized account profile |
 | `GET` | `/api/read/posts?after=&limit=` | Bounded owned-post page |
+| `GET` | `/api/read/posts/:id` | One normalized Threads media object |
 | `GET` | `/api/read/posts/:id/replies?after=&limit=` | Bounded top-level reply page/capability state |
 | `GET` | `/api/read/posts/:id/insights` | Supported normalized post metrics |
 | `GET` | `/api/read/insights/account` | Supported normalized account metrics |
+| `GET` | `/api/read/insights/account/compare?days=7|14|30` | Two comparable account-insight periods, excluding follower snapshot metrics |
+| `GET` | `/api/audit/events?after=&limit=` | Bounded safe operational events |
 | `POST` | `/api/publish/posts` | Validate and publish one text post with a client-generated request ID |
 | `GET` | `/auth/threads/start` | OAuth initiation |
 | `GET` | `/auth/threads/callback` | OAuth callback/state validation |
@@ -110,7 +127,7 @@ Provider endpoints used:
 - `GET /v1.0/me/threads` — owned posts and cursor pagination
 - `GET /v1.0/{media-id}/replies` — top-level replies
 - `GET /v1.0/{media-id}/insights` — post metrics (`views`, `likes`, `replies`, `reposts`, `quotes`, `shares`)
-- `GET /v1.0/{user-id}/threads_insights` — account metrics (`views`, `likes`, `replies`, `reposts`, `quotes`, `clicks`, `followers_count`)
+- `GET /v1.0/{user-id}/threads_insights` — account metrics (`views`, `likes`, `replies`, `reposts`, `quotes`, `clicks`, `followers_count`); Phase 4 also uses supported `since`/`until` ranges without `followers_count` for 7/14/30-day comparisons
 
 Existing connections must reconnect to grant `threads_content_publish` and any missing read scopes. Threads testers can grant them during development. Users without an app role require App Review approval for each permission and a published app.
 
@@ -141,6 +158,7 @@ Cloudflare D1 stores only:
 - `oauth_states`: state hash, expiry, and single-use consumption timestamp
 - `threads_connections`: one account identity, timestamps, and AES-GCM encrypted access token
 - `publish_requests`: opaque request ID, account ID, content hash, state, and normalized success result for 24-hour duplicate protection
+- `audit_events`: allow-listed event type, outcome, safe resource ID/error category, and timestamp; no post text, credentials, or provider payloads
 
 Posts, replies, and insights are fetched on demand and are not persisted. Post text is not persisted in the duplicate-protection table. No access token, refresh token, App Secret, OAuth code, or provider Authorization header is returned to browser APIs or rendered HTML.
 
@@ -187,10 +205,10 @@ npm run build
 Latest implementation gate:
 
 - TypeScript: passing
-- Automated tests: **45 passed / 45**
+- Automated tests: **54 passed / 54**
 - Production build: passing
 
-Automated tests cover provider success/errors, pagination, replies, insights, text container creation, publish requests, validation, malformed responses, missing optional values, duplicate/ambiguous publish protection, capability states, Compose UI states, and browser credential boundaries.
+Automated tests cover provider success/errors, pagination, replies, period insight comparisons, post detail, safe audit allow-listing/pagination, text container creation, publish requests, validation, malformed responses, missing optional values, duplicate/ambiguous publish protection, capability states, operator UI states, and browser credential boundaries.
 
 ## Deployment
 
@@ -198,7 +216,7 @@ Automated tests cover provider success/errors, pagination, replies, insights, te
 - **Production:** https://threads-tools.pages.dev
 - **Deployment status:** Active; application shell and D1 schema deployed
 - **Provider configuration status:** Not configured in Cloudflare Pages secrets at the time of deployment
-- **D1:** `threads-tools-production`; migrations `0001_phase1_connection.sql` and `0002_phase3_publish_requests.sql` required
+- **D1:** `threads-tools-production`; migrations `0001_phase1_connection.sql`, `0002_phase3_publish_requests.sql`, and `0003_phase4_audit_events.sql` required
 
 To activate the provider connection:
 
@@ -210,6 +228,6 @@ To activate the provider connection:
 
 ## Gate and next steps
 
-The Phase 3 implementation and automated quality gate pass. The Phase 3 product acceptance gate remains **BLOCKED — production Threads configuration, `threads_content_publish`, and a real successful publish verification are required**. Build success or a mocked provider test is not treated as real-world publishing proof.
+The Phase 4 implementation and automated quality gate pass. The Phase 4 product acceptance gate remains **BLOCKED — production Threads configuration and a real connected-account verification of dashboard, post detail, engagement, period insights, and preserved publishing are required**. Build success or a mocked provider test is not treated as real-world publishing proof.
 
 Smallest next action: add the seven documented environment variables as Cloudflare Pages secrets, configure Meta's callback URI, apply D1 migrations, reconnect with the Phase 3 scopes, and execute the real-account checklist above. Never paste secret values into source, GitHub, or chat.

@@ -33,6 +33,7 @@ function provider(overrides: Partial<ThreadsProvider> = {}): ThreadsProvider {
     listReplies: vi.fn(async () => ({ status: 'empty' as const, items: [] })),
     getPostInsights: vi.fn(async () => []),
     getAccountInsights: vi.fn(async () => []),
+    getAccountInsightsRange: vi.fn(async () => []),
     createTextContainer: vi.fn(async () => 'container'),
     publishContainer: vi.fn(async () => 'post'),
     getPost: vi.fn(async () => ({ id: 'post' })),

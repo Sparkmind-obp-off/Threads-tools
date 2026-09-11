@@ -1,4 +1,4 @@
-import type { PublishRequestState, PublishResult, SafeConnection, ThreadsAccount } from '../domain/types'
+import type { AuditEvent, AuditEventType, AuditOutcome, AuditPage, PublishRequestState, PublishResult, SafeConnection, ThreadsAccount } from '../domain/types'
 import { decryptToken, encryptToken, sha256 } from '../auth/crypto'
 
 export interface OAuthStateStore {
@@ -33,6 +33,11 @@ export interface PublishRequestStore {
   claim(requestId: string, accountId: string, contentHash: string, now?: Date): Promise<PublishRequestState>
   markPublished(requestId: string, result: PublishResult, now?: Date): Promise<void>
   markFailed(requestId: string, now?: Date): Promise<void>
+}
+
+export interface AuditStore {
+  record(eventType: AuditEventType, outcome: AuditOutcome, resourceId?: string, errorCategory?: string, now?: Date): Promise<void>
+  list(cursor?: string, limit?: number): Promise<AuditPage>
 }
 
 export class D1OAuthStateStore implements OAuthStateStore {
@@ -94,6 +99,38 @@ export class D1ConnectionStore implements ConnectionStore {
   }
 
   async disconnect(): Promise<void> { await this.db.prepare('DELETE FROM threads_connections WHERE id = 1').run() }
+}
+
+export class D1AuditStore implements AuditStore {
+  constructor(private readonly db: D1Database) {}
+
+  async record(eventType: AuditEventType, outcome: AuditOutcome, resourceId?: string, errorCategory?: string, now = new Date()): Promise<void> {
+    await this.db.prepare(`INSERT INTO audit_events (event_type, outcome, resource_id, error_category, occurred_at)
+      VALUES (?, ?, ?, ?, ?)`).bind(eventType, outcome, resourceId ?? null, errorCategory ?? null, now.toISOString()).run()
+  }
+
+  async list(cursor?: string, limit = 25): Promise<AuditPage> {
+    const bounded = Number.isInteger(limit) ? Math.min(Math.max(limit, 1), 100) : 25
+    const beforeId = cursor && /^\d+$/.test(cursor) ? Number(cursor) : Number.MAX_SAFE_INTEGER
+    const rows = await this.db.prepare(`SELECT id, event_type, outcome, resource_id, error_category, occurred_at
+      FROM audit_events WHERE id < ? ORDER BY id DESC LIMIT ?`).bind(beforeId, bounded + 1).all<Record<string, string | number | null>>()
+    const records = rows.results ?? []
+    const hasMore = records.length > bounded
+    const visible = records.slice(0, bounded)
+    const items: AuditEvent[] = visible.map((row) => ({
+      id: Number(row.id),
+      eventType: String(row.event_type) as AuditEventType,
+      outcome: String(row.outcome) as AuditOutcome,
+      occurredAt: String(row.occurred_at),
+      ...(row.resource_id ? { resourceId: String(row.resource_id) } : {}),
+      ...(row.error_category ? { errorCategory: String(row.error_category) } : {}),
+    }))
+    return {
+      status: items.length ? 'supported' : 'empty',
+      items,
+      ...(hasMore ? { nextCursor: String(items[items.length - 1].id) } : {}),
+    }
+  }
 }
 
 export class D1PublishRequestStore implements PublishRequestStore {

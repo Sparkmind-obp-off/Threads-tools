@@ -12,6 +12,7 @@ export interface ThreadsProvider {
   listReplies(accessToken: string, mediaId: string, cursor?: string, limit?: number): Promise<PageResult<ThreadsReply>>
   getPostInsights(accessToken: string, mediaId: string): Promise<InsightMetric[]>
   getAccountInsights(accessToken: string, userId: string): Promise<InsightMetric[]>
+  getAccountInsightsRange(accessToken: string, userId: string, since: number, until: number): Promise<InsightMetric[]>
   createTextContainer(accessToken: string, userId: string, text: string): Promise<string>
   publishContainer(accessToken: string, userId: string, containerId: string): Promise<string>
   getPost(accessToken: string, mediaId: string): Promise<ThreadsPost>
@@ -29,6 +30,7 @@ const POST_FIELDS = 'id,media_product_type,media_type,media_url,permalink,userna
 const REPLY_FIELDS = 'id,media_product_type,media_type,media_url,permalink,username,text,timestamp,shortcode,thumbnail_url,is_quote_post,quoted_post,gif_url,topic_tag,has_replies,root_post,replied_to,is_reply,is_reply_owned_by_me,hide_status,is_verified,profile_picture_url'
 const POST_METRICS = 'views,likes,replies,reposts,quotes,shares'
 const ACCOUNT_METRICS = 'views,likes,replies,reposts,quotes,clicks,followers_count'
+const ACCOUNT_PERIOD_METRICS = 'views,likes,replies,reposts,quotes,clicks'
 
 export class MetaThreadsProvider implements ThreadsProvider {
   constructor(private readonly config: AppConfig, private readonly fetcher: typeof fetch = fetch) {}
@@ -98,6 +100,15 @@ export class MetaThreadsProvider implements ThreadsProvider {
     return normalizeInsights(payload)
   }
 
+  async getAccountInsightsRange(accessToken: string, userId: string, since: number, until: number): Promise<InsightMetric[]> {
+    const payload = await this.get(`${encodeURIComponent(userId)}/threads_insights`, accessToken, {
+      metric: ACCOUNT_PERIOD_METRICS,
+      since: String(since),
+      until: String(until),
+    }, 'INSIGHTS_READ_FAILED', 'Account insight comparison could not be loaded.')
+    return normalizeInsights(payload)
+  }
+
   async createTextContainer(accessToken: string, userId: string, text: string): Promise<string> {
     const payload = await this.post(`${encodeURIComponent(userId)}/threads`, accessToken, { media_type: 'TEXT', text }, 'CONTAINER_CREATION_FAILED', 'Threads could not prepare this post.')
     return normalizePublishId(payload, 'container')
@@ -109,7 +120,7 @@ export class MetaThreadsProvider implements ThreadsProvider {
   }
 
   async getPost(accessToken: string, mediaId: string): Promise<ThreadsPost> {
-    const payload = await this.get(encodeURIComponent(mediaId), accessToken, { fields: 'id,permalink,timestamp,text,media_type' }, 'PUBLISHED_POST_LOOKUP_FAILED', 'The published post details could not be loaded.')
+    const payload = await this.get(encodeURIComponent(mediaId), accessToken, { fields: POST_FIELDS }, 'POST_READ_FAILED', 'The Threads post details could not be loaded.')
     return normalizePost(payload)
   }
 

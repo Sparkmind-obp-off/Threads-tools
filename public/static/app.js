@@ -113,7 +113,7 @@ function postCard(post, options = {}) {
   const permalink = safeUrl(post.permalink)
   const text = post.text ? escapeHtml(post.text) : '<span class="muted-text">No text returned for this media post.</span>'
   const select = options.select ? `<button class="button secondary select-post" data-post-id="${escapeHtml(post.id)}" type="button">View replies</button>` : ''
-  return `<article class="post-card" data-id="${escapeHtml(post.id)}">${mediaMarkup(post)}<div class="post-body"><div class="post-meta"><span>${escapeHtml(formatDate(post.timestamp))}</span><span>${escapeHtml(post.mediaType || 'Media type unavailable')}</span></div><p class="post-text">${text}</p><div class="post-tags">${post.topicTag ? `<span class="badge neutral">${escapeHtml(post.topicTag)}</span>` : ''}${post.isQuotePost ? '<span class="badge neutral">Quote</span>' : ''}</div><div class="post-actions">${permalink ? `<a class="text-link" href="${escapeHtml(permalink)}" target="_blank" rel="noopener noreferrer">Open on Threads</a>` : '<span class="muted-text">Permalink unavailable</span>'}${select}</div></div></article>`
+  return `<article class="post-card" data-id="${escapeHtml(post.id)}">${mediaMarkup(post)}<div class="post-body"><div class="post-meta"><span>${escapeHtml(formatDate(post.timestamp))}</span><span>${escapeHtml(post.mediaType || 'Media type unavailable')}</span></div><p class="post-text">${text}</p><div class="post-tags">${post.topicTag ? `<span class="badge neutral">${escapeHtml(post.topicTag)}</span>` : ''}${post.isQuotePost ? '<span class="badge neutral">Quote</span>' : ''}</div><div class="post-actions"><a class="text-link" href="/posts/${encodeURIComponent(post.id)}">Open details</a><a class="text-link" href="/engagement?post=${encodeURIComponent(post.id)}">Engagement</a>${permalink ? `<a class="text-link" href="${escapeHtml(permalink)}" target="_blank" rel="noopener noreferrer">Open on Threads</a>` : '<span class="muted-text">Permalink unavailable</span>'}${select}</div></div></article>`
 }
 
 function replyCard(reply) {
@@ -169,14 +169,22 @@ async function loadSettings() {
 }
 
 async function loadDashboard() {
-  const accountNode = $('#dashboard-account'); const postsNode = $('#dashboard-posts')
+  const healthNode = $('#dashboard-health'); const accountNode = $('#dashboard-account'); const postsNode = $('#dashboard-posts')
   const engagementNode = $('#dashboard-engagement'); const insightsNode = $('#dashboard-insights')
-  const [account, posts, insights] = await Promise.allSettled([
-    request('/api/read/account'), request('/api/read/posts?limit=4'), request('/api/read/insights/account'),
+  const [connection, account, posts, insights] = await Promise.allSettled([
+    request('/api/connection/status'), request('/api/read/account'), request('/api/read/posts?limit=4'), request('/api/read/insights/account'),
   ])
+  if (connection.status === 'fulfilled') {
+    const value = connection.value
+    if (value.status === 'connected') {
+      const expires = value.tokenExpiresAt ? new Date(value.tokenExpiresAt) : undefined
+      const expiring = expires && expires.getTime() <= Date.now() + 7 * 24 * 60 * 60 * 1000
+      healthNode.innerHTML = `<div class="panel-heading"><div><p class="eyebrow">Account & configuration health</p><h2>${expiring ? 'Reauthorization recommended' : 'Connection healthy'}</h2></div><span class="badge ${expiring ? 'warning' : 'supported'}">${expiring ? 'Action needed' : 'Connected'}</span></div><p>${expiring ? 'The stored authorization is expired or expires within seven days. Reconnect before daily operations are interrupted.' : 'Server configuration is available and the account connection is active.'}</p>${expiring ? '<a class="button primary" href="/auth/threads/start">Reconnect Threads</a>' : '<a class="text-link" href="/settings">Review connection</a>'}`
+    } else healthNode.innerHTML = capabilityState('Threads is not connected', 'Open Connection & Settings to authorize the operator account.', 'not_configured')
+  } else healthNode.innerHTML = recoveryState(connection.reason)
   if (account.status === 'fulfilled') {
     const item = account.value.data
-    accountNode.innerHTML = `<div class="panel-heading"><div><p class="eyebrow">Connected account</p><h2>${escapeHtml(item.name || item.username || 'Threads account')}</h2></div><span class="badge supported">Live</span></div><div class="account-card">${item.profilePictureUrl && safeUrl(item.profilePictureUrl) ? `<img class="account-avatar image" src="${escapeHtml(safeUrl(item.profilePictureUrl))}" alt="">` : `<div class="account-avatar">${escapeHtml((item.name || item.username || 'T')[0])}</div>`}<div><strong>${item.username ? '@' + escapeHtml(item.username) : escapeHtml(item.id)}</strong><p>${escapeHtml(item.biography || 'Biography unavailable')}</p></div></div>`
+    accountNode.innerHTML = `<div class="panel-heading"><div><p class="eyebrow">Connected account</p><h2>${escapeHtml(item.name || item.username || 'Threads account')}</h2></div><span class="badge supported">Live data</span></div><div class="account-card">${item.profilePictureUrl && safeUrl(item.profilePictureUrl) ? `<img class="account-avatar image" src="${escapeHtml(safeUrl(item.profilePictureUrl))}" alt="">` : `<div class="account-avatar">${escapeHtml((item.name || item.username || 'T')[0])}</div>`}<div><strong>${item.username ? '@' + escapeHtml(item.username) : escapeHtml(item.id)}</strong><p>${escapeHtml(item.biography || 'Biography unavailable')}</p></div></div>`
   } else accountNode.innerHTML = recoveryState(account.reason)
   if (posts.status === 'fulfilled') {
     postsNode.innerHTML = posts.value.items.length ? posts.value.items.map((item) => postCard(item)).join('') : capabilityState('No posts yet', 'Threads returned a valid empty post list.', 'empty')
@@ -184,9 +192,8 @@ async function loadDashboard() {
     if (first) {
       try {
         const replies = await request(`/api/read/posts/${encodeURIComponent(first.id)}/replies?limit=10`)
-        if (replies.status === 'unsupported') engagementNode.innerHTML = capabilityState('Replies unsupported', replies.message)
-        else if (replies.status === 'error') engagementNode.innerHTML = capabilityState('Replies unavailable', replies.message, 'error')
-        else engagementNode.innerHTML = `<p class="eyebrow">Latest-post engagement</p><h2>${replies.data.items.length.toLocaleString()}</h2><p>Top-level ${replies.data.items.length === 1 ? 'reply' : 'replies'} returned for the latest post.</p><a class="text-link" href="/engagement">Open engagement</a>`
+        if (['unsupported', 'error', 'reauthorization_required'].includes(replies.status)) engagementNode.innerHTML = capabilityState('Replies unavailable', replies.message, replies.status)
+        else engagementNode.innerHTML = `<p class="eyebrow">Latest-post engagement</p><h2>${replies.data.items.length.toLocaleString()}</h2><p>Top-level ${replies.data.items.length === 1 ? 'reply' : 'replies'} returned for the latest post.</p><a class="text-link" href="/engagement?post=${encodeURIComponent(first.id)}">Open engagement</a>`
       } catch (error) { engagementNode.innerHTML = recoveryState(error) }
     } else engagementNode.innerHTML = capabilityState('No engagement to inspect', 'Publish activity is required before replies can be read.', 'empty')
   } else {
@@ -195,43 +202,60 @@ async function loadDashboard() {
   }
   if (insights.status === 'fulfilled') {
     const data = insights.value
-    if (data.status === 'supported') insightsNode.innerHTML = `<p class="eyebrow">Account insights</p><div class="mini-metrics">${data.data.slice(0, 3).map((metric) => `<div><strong>${(metricValue(metric) ?? '—').toLocaleString?.() || '—'}</strong><span>${escapeHtml(metric.title || metric.name)}</span></div>`).join('')}</div><a class="text-link" href="/insights">View insights</a>`
+    if (data.status === 'supported') insightsNode.innerHTML = `<p class="eyebrow">Account insights</p><div class="mini-metrics">${data.data.slice(0, 3).map((metric) => `<div><strong>${typeof metricValue(metric) === 'number' ? metricValue(metric).toLocaleString() : 'Unavailable'}</strong><span>${escapeHtml(metric.title || metric.name)}</span></div>`).join('')}</div><a class="text-link" href="/insights">View insights</a>`
     else insightsNode.innerHTML = capabilityState('Insights unavailable', data.message || 'No account metrics were returned.', data.status)
   } else insightsNode.innerHTML = recoveryState(insights.reason)
 }
 
 let postsCursor
+let loadedPosts = []
+function renderLoadedPosts() {
+  const search = ($('#posts-search')?.value || '').trim().toLocaleLowerCase()
+  const sort = $('#posts-sort')?.value || 'newest'
+  const filtered = loadedPosts.filter((item) => !search || (item.text || '').toLocaleLowerCase().includes(search))
+    .sort((a, b) => {
+      const left = a.timestamp ? new Date(a.timestamp).getTime() : 0
+      const right = b.timestamp ? new Date(b.timestamp).getTime() : 0
+      return sort === 'oldest' ? left - right : right - left
+    })
+  $('#posts-list').innerHTML = filtered.length ? filtered.map((item) => postCard(item)).join('') : capabilityState(search ? 'No loaded posts match' : 'No posts found', search ? 'Change the search or load another bounded provider page.' : 'Threads returned a valid empty dataset.', 'empty')
+  $('#posts-count').textContent = `${filtered.length} of ${loadedPosts.length} loaded`
+  $('#posts-filter-note').textContent = search ? `Filtering ${loadedPosts.length} loaded posts locally. Provider pages not yet loaded are not searched.` : `${loadedPosts.length} posts loaded from bounded provider pages.`
+}
 async function loadPosts(append = false) {
   const list = $('#posts-list'); const button = $('#load-more-posts')
-  if (!append) list.innerHTML = '<div class="skeleton-lines"><span></span><span></span></div>'
+  if (!append) { list.innerHTML = '<div class="skeleton-lines"><span></span><span></span></div>'; loadedPosts = []; postsCursor = undefined }
   button.disabled = true
   try {
     const query = postsCursor ? `?after=${encodeURIComponent(postsCursor)}&limit=12` : '?limit=12'
     const result = await request('/api/read/posts' + query)
-    const markup = result.items.map((item) => postCard(item)).join('')
-    if (append) list.insertAdjacentHTML('beforeend', markup)
-    else list.innerHTML = markup || capabilityState('No posts found', 'Threads returned a valid empty dataset.', 'empty')
+    loadedPosts.push(...result.items.filter((item) => !loadedPosts.some((existing) => existing.id === item.id)))
     postsCursor = result.nextCursor
+    renderLoadedPosts()
     button.classList.toggle('hidden', !postsCursor)
-    $('#posts-count').textContent = result.status === 'empty' ? 'Empty' : 'Loaded'
   } catch (error) { if (!append) list.innerHTML = recoveryState(error) }
   finally { button.disabled = false; button.textContent = 'Load more' }
 }
 
 let selectedPostId
 let repliesCursor
+let engagementPosts = []
 async function loadReplies(postId, append = false) {
   selectedPostId = postId
   if (!append) repliesCursor = undefined
+  const selected = engagementPosts.find((item) => item.id === postId)
+  const context = $('#selected-post-context')
+  if (context && selected) context.innerHTML = `<p class="eyebrow">Selected post</p><h3>${escapeHtml(selected.text || `${selected.mediaType || 'Media'} post`)}</h3><p>${escapeHtml(formatDate(selected.timestamp))}</p><a class="text-link" href="/posts/${encodeURIComponent(selected.id)}">Open post details</a>`
+  if (!append) history.replaceState({}, '', `/engagement?post=${encodeURIComponent(postId)}`)
   const list = $('#replies-list'); const badge = $('#replies-status'); const button = $('#load-more-replies')
   if (!append) list.innerHTML = '<div class="skeleton-lines"><span></span><span></span></div>'
   badge.textContent = 'Loading'; button.disabled = true
   try {
     const query = repliesCursor ? `?after=${encodeURIComponent(repliesCursor)}&limit=25` : '?limit=25'
     const result = await request(`/api/read/posts/${encodeURIComponent(postId)}/replies${query}`)
-    if (result.status === 'unsupported' || result.status === 'error') {
+    if (['unsupported', 'error', 'reauthorization_required'].includes(result.status)) {
       list.innerHTML = capabilityState(result.status === 'unsupported' ? 'Replies unsupported' : 'Replies unavailable', result.message, result.status)
-      badge.textContent = result.status === 'unsupported' ? 'Unsupported' : 'Error'; button.classList.add('hidden'); return
+      badge.textContent = result.status.replaceAll('_', ' '); button.classList.add('hidden'); return
     }
     const markup = result.data.items.map(replyCard).join('')
     if (append) list.insertAdjacentHTML('beforeend', markup)
@@ -247,13 +271,69 @@ async function loadEngagement() {
   const list = $('#engagement-posts')
   try {
     const result = await request('/api/read/posts?limit=10')
+    engagementPosts = result.items
     if (!result.items.length) { list.innerHTML = capabilityState('No posts found', 'There are no posts available for reply lookup.', 'empty'); return }
     list.innerHTML = result.items.map((post) => `<article class="compact-post"><p>${escapeHtml(post.text || `${post.mediaType || 'Media'} post`)}</p><small>${escapeHtml(formatDate(post.timestamp))}</small><button class="button secondary select-post" data-post-id="${escapeHtml(post.id)}" type="button">View replies</button></article>`).join('')
     list.querySelectorAll('.select-post').forEach((button) => button.addEventListener('click', () => loadReplies(button.dataset.postId)))
+    const requested = new URLSearchParams(location.search).get('post')
+    const initial = result.items.find((post) => post.id === requested) || result.items[0]
+    if (initial) loadReplies(initial.id)
   } catch (error) { list.innerHTML = recoveryState(error) }
 }
 
+function comparisonValue(metrics, name) {
+  const metric = metrics.find((item) => item.name === name)
+  return metric ? metricValue(metric) : undefined
+}
+
+async function loadInsightComparison() {
+  const node = $('#insight-comparison')
+  const days = Number($('#insight-period')?.value || 7)
+  node.innerHTML = '<div class="skeleton-lines"><span></span></div>'
+  try {
+    const result = await request(`/api/read/insights/account/compare?days=${days}`)
+    if (result.status !== 'supported') { node.innerHTML = capabilityState('Comparison unavailable', result.message || 'No comparable metrics were returned.', result.status); return }
+    const names = [...new Set([...result.data.current.metrics, ...result.data.previous.metrics].map((metric) => metric.name))]
+    node.innerHTML = `<p class="period-context"><strong>${escapeHtml(result.data.current.period.label)}</strong> ${escapeHtml(formatDate(result.data.current.period.since))} – ${escapeHtml(formatDate(result.data.current.period.until))}; compared with ${escapeHtml(result.data.previous.period.label.toLowerCase())}.</p><div class="comparison-table" role="table" aria-label="Account metric comparison">${names.map((name) => {
+      const current = comparisonValue(result.data.current.metrics, name)
+      const previous = comparisonValue(result.data.previous.metrics, name)
+      const change = typeof current === 'number' && typeof previous === 'number' ? current - previous : undefined
+      return `<div class="comparison-row" role="row"><strong role="cell">${escapeHtml(name.replaceAll('_', ' '))}</strong><span role="cell">Current: ${typeof current === 'number' ? current.toLocaleString() : 'Unavailable'}</span><span role="cell">Previous: ${typeof previous === 'number' ? previous.toLocaleString() : 'Unavailable'}</span><span role="cell">Change: ${typeof change === 'number' ? `${change > 0 ? '+' : ''}${change.toLocaleString()}` : 'Unavailable'}</span></div>`
+    }).join('')}</div><p class="muted-text">Followers are excluded because Meta does not support since/until for followers_count.</p>`
+  } catch (error) { node.innerHTML = recoveryState(error) }
+}
+
+async function loadPostDetail() {
+  const postId = decodeURIComponent(location.pathname.split('/').filter(Boolean)[1] || '')
+  const detail = $('#post-detail'); const metrics = $('#post-detail-metrics'); const replies = $('#post-detail-replies')
+  if (!/^\d{1,64}$/.test(postId)) {
+    detail.innerHTML = capabilityState('Invalid post identifier', 'Return to Posts and choose a valid owned post.', 'error')
+    metrics.innerHTML = capabilityState('Metrics unavailable', 'A valid post is required.', 'error')
+    replies.innerHTML = capabilityState('Replies unavailable', 'A valid post is required.', 'error')
+    return
+  }
+  const [postResult, metricResult, replyResult] = await Promise.allSettled([
+    request(`/api/read/posts/${encodeURIComponent(postId)}`),
+    request(`/api/read/posts/${encodeURIComponent(postId)}/insights`),
+    request(`/api/read/posts/${encodeURIComponent(postId)}/replies?limit=5`),
+  ])
+  if (postResult.status === 'fulfilled') {
+    const post = postResult.value.data; const permalink = safeUrl(post.permalink)
+    detail.innerHTML = `<div class="panel-heading"><div><p class="eyebrow">${escapeHtml(post.mediaType || 'Media type unavailable')}</p><h2>${escapeHtml(post.text || 'No text returned')}</h2></div><button id="refresh-post-detail" class="button secondary" type="button">Refresh</button></div>${mediaMarkup(post)}<dl class="details"><div><dt>Post ID</dt><dd>${escapeHtml(post.id)}</dd></div><div><dt>Published</dt><dd>${escapeHtml(formatDate(post.timestamp))}</dd></div>${post.topicTag ? `<div><dt>Topic</dt><dd>${escapeHtml(post.topicTag)}</dd></div>` : ''}</dl><div class="actions">${permalink ? `<a class="button primary" href="${escapeHtml(permalink)}" target="_blank" rel="noopener noreferrer">View on Threads</a>` : '<span class="muted-text">Permalink unavailable</span>'}<a class="button secondary" href="/engagement?post=${encodeURIComponent(post.id)}">Open engagement</a></div>`
+    $('#refresh-post-detail')?.addEventListener('click', loadPostDetail)
+  } else detail.innerHTML = recoveryState(postResult.reason)
+  if (metricResult.status === 'fulfilled') metrics.innerHTML = metricResult.value.status === 'supported' ? metricCards(metricResult.value.data) : capabilityState('Metrics unavailable', metricResult.value.message || 'No metrics returned.', metricResult.value.status)
+  else metrics.innerHTML = recoveryState(metricResult.reason)
+  if (replyResult.status === 'fulfilled') {
+    const result = replyResult.value
+    replies.innerHTML = result.status === 'supported'
+      ? (result.data.items.length ? `${result.data.items.map(replyCard).join('')}<a class="text-link" href="/engagement?post=${encodeURIComponent(postId)}">See reply workflow</a>` : capabilityState('No replies', 'No top-level replies are visible for this post.', 'empty'))
+      : capabilityState('Replies unavailable', result.message || 'Replies are unavailable.', result.status)
+  } else replies.innerHTML = recoveryState(replyResult.reason)
+}
+
 async function loadInsights() {
+  loadInsightComparison()
   const accountNode = $('#account-insights'); const badge = $('#account-insights-status'); const postsNode = $('#insight-posts')
   try {
     const result = await request('/api/read/insights/account')
@@ -275,6 +355,27 @@ async function loadInsights() {
       return `<article class="insight-row"><div><h3>${heading}</h3><p>${escapeHtml(formatDate(post.timestamp))}</p></div><div class="metric-grid compact">${metricCards(result.data)}</div></article>`
     }).join('')
   } catch (error) { postsNode.innerHTML = recoveryState(error) }
+}
+
+let auditCursor
+function auditLabel(eventType) {
+  return ({ oauth_connected: 'Threads connected', oauth_disconnected: 'Threads disconnected', publish_attempt: 'Publish started', publish_succeeded: 'Publish succeeded', publish_failed: 'Publish failed' })[eventType] || 'Operator event'
+}
+async function loadAudit(append = false) {
+  const list = $('#audit-list'); const button = $('#load-more-audit'); const status = $('#audit-status')
+  if (!append) { auditCursor = undefined; list.innerHTML = '<div class="skeleton-lines"><span></span><span></span></div>' }
+  button.disabled = true
+  try {
+    const query = auditCursor ? `?after=${encodeURIComponent(auditCursor)}&limit=25` : '?limit=25'
+    const result = await request('/api/audit/events' + query)
+    const markup = result.items.map((event) => `<article class="activity-row"><div><strong>${escapeHtml(auditLabel(event.eventType))}</strong><p>${escapeHtml(formatDate(event.occurredAt))}</p></div><div><span class="badge ${event.outcome === 'success' ? 'supported' : event.outcome === 'failure' ? 'danger' : 'neutral'}">${escapeHtml(event.outcome)}</span>${event.resourceId ? `<small>Resource ${escapeHtml(event.resourceId)}</small>` : ''}${event.errorCategory ? `<small>Category ${escapeHtml(event.errorCategory)}</small>` : ''}</div></article>`).join('')
+    if (append) list.insertAdjacentHTML('beforeend', markup)
+    else list.innerHTML = markup || capabilityState('No activity recorded', 'Safe operational events will appear after connection or publishing actions.', 'empty')
+    auditCursor = result.nextCursor
+    button.classList.toggle('hidden', !auditCursor)
+    status.textContent = result.status === 'empty' ? 'Empty' : 'Supported'
+  } catch (error) { if (!append) list.innerHTML = recoveryState(error); status.textContent = 'Error' }
+  finally { button.disabled = false; button.textContent = 'Load more activity' }
 }
 
 let composeConnected = false
@@ -371,9 +472,11 @@ async function loadWorkspace() {
   if (page === 'settings') return loadSettings()
   if (page === 'dashboard') return loadDashboard()
   if (page === 'posts') return loadPosts()
+  if (page === 'post-detail') return loadPostDetail()
   if (page === 'compose') return loadCompose()
   if (page === 'engagement') return loadEngagement()
   if (page === 'insights') return loadInsights()
+  if (page === 'activity') return loadAudit()
 }
 
 $('#login-form')?.addEventListener('submit', async (event) => {
@@ -388,7 +491,11 @@ $('#login-form')?.addEventListener('submit', async (event) => {
 $('#post-text')?.addEventListener('input', () => { if (!composePublishing && !composeLocked) composeRequestId = undefined; composeValidation() })
 $('#compose-form')?.addEventListener('submit', publishCompose)
 $('#load-more-posts')?.addEventListener('click', () => { $('#load-more-posts').textContent = 'Loading…'; loadPosts(true) })
+$('#posts-search')?.addEventListener('input', renderLoadedPosts)
+$('#posts-sort')?.addEventListener('change', renderLoadedPosts)
+$('#insight-period')?.addEventListener('change', loadInsightComparison)
 $('#load-more-replies')?.addEventListener('click', () => { $('#load-more-replies').textContent = 'Loading…'; loadReplies(selectedPostId, true) })
+$('#load-more-audit')?.addEventListener('click', () => { $('#load-more-audit').textContent = 'Loading…'; loadAudit(true) })
 signOut?.addEventListener('click', async () => { await request('/api/session', { method: 'DELETE' }); showLogin() })
 
 async function init() {

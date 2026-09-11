@@ -1,5 +1,5 @@
 export type ConnectionStatus = 'connected' | 'disconnected' | 'not_configured' | 'error'
-export type CapabilityStatus = 'supported' | 'unsupported' | 'not_configured' | 'empty' | 'error'
+export type CapabilityStatus = 'supported' | 'unsupported' | 'not_configured' | 'empty' | 'error' | 'reauthorization_required'
 
 export interface SafeConnection {
   status: ConnectionStatus
@@ -72,6 +72,36 @@ export interface CapabilityResult<T> {
   data?: T
   message?: string
   reauthorizationRequired?: boolean
+}
+
+export interface InsightPeriod {
+  since: string
+  until: string
+  label: string
+}
+
+export interface InsightComparison {
+  days: number
+  current: { period: InsightPeriod; metrics: InsightMetric[] }
+  previous: { period: InsightPeriod; metrics: InsightMetric[] }
+}
+
+export type AuditEventType = 'oauth_connected' | 'oauth_disconnected' | 'publish_attempt' | 'publish_succeeded' | 'publish_failed'
+export type AuditOutcome = 'success' | 'failure' | 'started'
+
+export interface AuditEvent {
+  id: number
+  eventType: AuditEventType
+  outcome: AuditOutcome
+  occurredAt: string
+  resourceId?: string
+  errorCategory?: string
+}
+
+export interface AuditPage {
+  status: 'supported' | 'empty'
+  items: AuditEvent[]
+  nextCursor?: string
 }
 
 export interface PublishInput {

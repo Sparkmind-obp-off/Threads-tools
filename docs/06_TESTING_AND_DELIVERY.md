@@ -56,6 +56,15 @@ npm run build
 - D1-backed request IDs prevent active duplicate submissions and replay a persisted success without another provider call.
 - Ambiguous publish results are not marked safe-to-retry and are never blindly republished.
 
+### Phase 4 operator polish
+
+- Dashboard connected/disconnected, warning, empty, provider error, and reauthorization-oriented states.
+- Bounded loaded-post search/sort and preserved cursor pagination.
+- Real post detail with missing optional fields and verified permalink-only action.
+- Selected-post engagement context and top-level-only reply capability states.
+- Valid 7/14/30-day current/previous account metric comparisons; unavailable metrics remain absent.
+- Safe audit event allow-listing and bounded cursor pagination; sensitive extra fields are dropped.
+
 ### UI and client security
 
 - Dashboard, Posts, Compose, Engagement, Insights, and Settings shells render.
@@ -76,11 +85,14 @@ npm run build
 9. Open `/`, `/posts`, `/engagement`, and `/insights`; verify existing read behavior and pagination remain intact.
 10. Verify replies and insights render when permissions are granted; otherwise verify an honest Unsupported state.
 11. Inspect browser network responses, rendered HTML, and logs for absence of access tokens, refresh tokens, authorization codes, App Secret, and provider authorization headers.
-12. Attempt a double click while publishing and confirm only one publish request is active.
-13. Expire/revoke the token and verify a safe reconnect instruction appears.
+12. Search/sort the bounded loaded post set, open a real post detail, and move to contextual engagement.
+13. Compare a supported account metric over 7 days and verify the two displayed periods match provider results.
+14. Inspect Activity and confirm only safe connection/publish metadata is present.
+15. Attempt a double click while publishing and confirm only one publish request is active.
+16. Expire/revoke the token and verify a safe reconnect instruction appears.
 
 ## Phase gates
 
 Phase 1 remains dependent on a successful operator-owned real OAuth connection.
 
-Phase 3 implementation passes automated checks only after all tests, typecheck, D1 migration, and production build pass. The final Phase 3 product gate remains `BLOCKED` until a real connected account with `threads_content_publish` successfully creates and publishes a real post in the deployed environment. App secrets, callback configuration, tester role/App Review, and permission grants are external dependencies.
+Phase 4 implementation passes automated checks only after all tests, typecheck, the Phase 4 D1 audit migration, and production build pass. The final Phase 3 product gate remains `BLOCKED` until a real connected account with `threads_content_publish` successfully creates and publishes a real post in the deployed environment. App secrets, callback configuration, tester role/App Review, and permission grants are external dependencies.

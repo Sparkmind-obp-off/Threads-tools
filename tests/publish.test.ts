@@ -17,6 +17,7 @@ function provider(overrides: Partial<ThreadsProvider> = {}): ThreadsProvider {
     listPosts: vi.fn(async () => ({ status: 'empty', items: [] })),
     listReplies: vi.fn(async () => ({ status: 'empty', items: [] })),
     getPostInsights: vi.fn(async () => []), getAccountInsights: vi.fn(async () => []),
+    getAccountInsightsRange: vi.fn(async () => []),
     createTextContainer: vi.fn(async () => 'container-10'),
     publishContainer: vi.fn(async () => 'post-11'),
     getPost: vi.fn(async () => ({ id: 'post-11', permalink: 'https://www.threads.net/@operator/post/abc', timestamp: '2026-09-11T10:00:00+0000' })),

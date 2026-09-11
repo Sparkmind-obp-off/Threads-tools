@@ -98,7 +98,7 @@ Metrics are lifetime values where supplied by Meta. Nested-reply metrics are not
 
 Permission: `threads_basic` + `threads_manage_insights`.
 
-Without `since`/`until`, time-ranged account metrics default to Meta's documented two-day window (yesterday through today). `followers_count` does not support `since`/`until`. Follower demographics are intentionally not requested because they require additional breakdown handling and at least 100 followers.
+Without `since`/`until`, time-ranged account metrics default to Meta's documented two-day window (yesterday through today). Phase 4 additionally sends paired bounded `since`/`until` Unix timestamp requests for 7, 14, or 30 days using `views,likes,replies,reposts,quotes,clicks`. `followers_count` does not support `since`/`until` and is therefore excluded from comparison requests. Follower demographics are intentionally not requested because they require additional breakdown handling and at least 100 followers.
 
 ## Error contract
 
@@ -130,8 +130,17 @@ Provider code `190` or HTTP 401 maps to a re-authentication instruction. Permiss
 - `not_configured` — required server configuration is missing.
 - `empty` — valid request returned no records/metrics.
 - `error` — provider/network/unexpected failure.
+- `reauthorization_required` — the provider rejected or the stored credential expired and the operator must reconnect.
 
 Missing metric values remain absent/undefined and are never converted to zero.
+
+## Phase 4 application endpoints
+
+- `GET /api/read/posts/:id` reuses the verified single-media provider endpoint and returns an allow-listed normalized post.
+- `GET /api/read/insights/account/compare?days=7|14|30` returns current and previous period labels plus only provider-returned metrics.
+- `GET /api/audit/events?after=&limit=` reads D1 application events only and does not call Threads.
+
+Search/sort is deliberately local to already-loaded post pages; no provider filtering contract is claimed.
 
 ## Official references
 

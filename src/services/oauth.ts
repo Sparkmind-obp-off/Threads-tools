@@ -1,6 +1,6 @@
 import { AppError, type SafeConnection } from '../domain/types'
 import type { ThreadsProvider } from '../threads/adapter'
-import type { ConnectionStore, OAuthStateStore } from '../storage/repositories'
+import type { AuditStore, ConnectionStore, OAuthStateStore } from '../storage/repositories'
 import { randomState } from '../auth/crypto'
 
 export interface CallbackInput { state?: string; code?: string; error?: string; errorDescription?: string }
@@ -11,6 +11,7 @@ export class OAuthService {
     private readonly states: OAuthStateStore,
     private readonly connections: ConnectionStore,
     private readonly now: () => Date = () => new Date(),
+    private readonly audit?: AuditStore,
   ) {}
 
   async start(): Promise<{ authorizationUrl: string }> {
@@ -37,6 +38,7 @@ export class OAuthService {
     const connectedAt = this.now()
     const expiresAt = token.expiresIn ? new Date(connectedAt.getTime() + token.expiresIn * 1000) : undefined
     await this.connections.save({ account, accessToken: token.accessToken, expiresAt, connectedAt })
+    await this.audit?.record('oauth_connected', 'success', account.id, undefined, connectedAt).catch(() => undefined)
     return this.connections.getSafe()
   }
 }
