@@ -224,21 +224,20 @@ Automated tests cover provider success/errors, pagination, replies, period insig
 
 - **Platform:** Cloudflare Pages + Hono + D1 (BYOK)
 - **Production:** https://threads-tools.pages.dev
-- **Deployment status:** Active; application shell and D1 schema deployed
-- **Provider configuration status:** Verify through `/setup`; readiness responses expose statuses only, never values
-- **Private access:** Configure Cloudflare Access for all page, API, and OAuth routes before treating the public URL as private. The application intentionally has no in-app operator password.
-- **D1:** `threads-tools-production`; migrations `0001_phase1_connection.sql`, `0002_phase3_publish_requests.sql`, and `0003_phase4_audit_events.sql` required
+- **Deployment status:** Phase 5 active on Cloudflare Pages (BYOK), deployed 2026-09-11
+- **Provider configuration status:** Not configured; `/setup` reports safe Missing states without exposing values
+- **Private access:** Not yet verified/configured; the URL returned HTTP 200 without an Access challenge during deployment verification. Configure Cloudflare Access for all page, API, and OAuth routes before treating it as private. The application intentionally has no in-app operator password.
+- **D1:** `threads-tools-production`; migrations `0001_phase1_connection.sql`, `0002_phase3_publish_requests.sql`, and `0003_phase4_audit_events.sql` are applied
 
 To activate the provider connection:
 
 1. Add all required environment values with Cloudflare Pages secrets (`OPERATOR_PASSWORD` is not used).
 2. Set `THREADS_REDIRECT_URI=https://threads-tools.pages.dev/auth/threads/callback`.
 3. Add that exact URI to Meta's valid OAuth redirect URIs.
-4. Apply production D1 migrations and redeploy if necessary.
-5. Connect/reconnect from `/settings` so the token grant includes `threads_content_publish`.
+4. Connect/reconnect from `/setup` so the token grant includes `threads_content_publish`.
 
 ## Gate and next steps
 
 The Phase 5 implementation and automated quality gate pass. The final product acceptance gate remains **BLOCKED — production deployment-level private access and a real connected-account verification of onboarding, dashboard, post detail, engagement, period insights, and preserved publishing are required**. Build success or a mocked provider test is not treated as real-world provider proof.
 
-Smallest next action: configure Cloudflare Access, add the six documented server environment values as Cloudflare Pages secrets, configure Meta's callback URI, apply D1 migrations, connect with the existing scopes, and execute the real-account checklist above. Never paste secret values into source, GitHub, or chat.
+Smallest next action: configure Cloudflare Access, add the six documented server environment values as Cloudflare Pages secrets, configure Meta's callback URI, connect with the existing scopes, and execute the real-account checklist above. Never paste secret values into source, GitHub, or chat.
