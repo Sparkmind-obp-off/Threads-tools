@@ -65,6 +65,15 @@ npm run build
 - Valid 7/14/30-day current/previous account metric comparisons; unavailable metrics remain absent.
 - Safe audit event allow-listing and bounded cursor pagination; sensitive extra fields are dropped.
 
+### Phase 5 personal access and onboarding
+
+- Dashboard, Posts, Insights, and other operator pages render without an in-app password gate.
+- The obsolete session/password API returns Not Found.
+- First-run setup and locally completed setup behavior are present without storing secrets.
+- Configuration readiness exposes status values only.
+- Connected, disconnected, and expired/reconnect states are covered.
+- OAuth state validation, encrypted token persistence, provider-side calls, and Phase 1–4 regression coverage remain intact.
+
 ### UI and client security
 
 - Dashboard, Posts, Compose, Engagement, Insights, and Settings shells render.
@@ -77,7 +86,7 @@ npm run build
 1. Configure all server secrets and apply the D1 migration.
 2. Add the exact callback URL in Meta App Dashboard.
 3. Ensure the account is a Threads Tester while the app is in development and accept the invitation.
-4. Sign in at `/settings` and reconnect the account.
+4. Open `/setup`, verify safe readiness states, and connect/reconnect the account without an application password.
 5. Confirm the authorization window requests `threads_basic`, `threads_content_publish`, `threads_read_replies`, and `threads_manage_insights` only.
 6. Open `/compose`; verify the connected account, byte count, validation, preview, and unsupported-media explanation.
 7. Publish one unique text post explicitly and confirm Threads returns a real post ID. Verify permalink/timestamp only appear when the provider returns them.
@@ -95,4 +104,4 @@ npm run build
 
 Phase 1 remains dependent on a successful operator-owned real OAuth connection.
 
-Phase 4 implementation passes automated checks only after all tests, typecheck, the Phase 4 D1 audit migration, and production build pass. The final Phase 3 product gate remains `BLOCKED` until a real connected account with `threads_content_publish` successfully creates and publishes a real post in the deployed environment. App secrets, callback configuration, tester role/App Review, and permission grants are external dependencies.
+Phase 5 implementation passes automated checks only after all tests, typecheck, and production build pass. The final product gate remains `BLOCKED` until deployment-level private access is confirmed and a real connected account verifies onboarding, read, insights, engagement, and preserved publishing in the deployed environment. App secrets, callback configuration, tester role/App Review, permission grants, and provider access are external dependencies.

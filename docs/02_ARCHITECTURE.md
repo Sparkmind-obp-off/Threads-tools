@@ -2,7 +2,7 @@
 
 ## Principle
 
-Use a thin server-side integration layer between the UI and Meta/Threads APIs. The UI never receives the App Secret.
+Use a thin server-side integration layer between the UI and Meta/Threads APIs. The UI never receives the App Secret. Threads Tools is a private single-owner application with no in-app operator password; production privacy is enforced at the deployment layer.
 
 ```text
 Browser
@@ -29,7 +29,8 @@ Meta / Threads
 - `engagement`: comments/replies available to the connected account.
 - `insights`: metrics exposed by supported endpoints.
 - `dashboard`: normalized UI data.
-- `config`: environment validation.
+- `config`: environment validation and safe readiness statuses.
+- `setup`: browser-local first-run completion plus server-provided safe configuration/connection state.
 - `audit`: safe operational logs without tokens or sensitive payloads.
 
 ## Data rule

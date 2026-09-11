@@ -1,4 +1,4 @@
-import { Hono, type Context, type Next } from 'hono'
+import { Hono, type Context } from 'hono'
 import { getConfig, missingConfiguration, type Env } from './config/env'
 import { AppError } from './domain/types'
 import { MetaThreadsProvider } from './threads/adapter'
@@ -6,8 +6,6 @@ import { D1AuditStore, D1ConnectionStore, D1OAuthStateStore, D1PublishRequestSto
 import { OAuthService } from './services/oauth'
 import { ThreadsReadService } from './services/read'
 import { ThreadsPublishService } from './services/publish'
-import { clearSession, createSession, hasSession } from './auth/session'
-import { constantTimeEqual } from './auth/crypto'
 
 const app = new Hono<{ Bindings: Env }>()
 
@@ -30,16 +28,8 @@ function jsonError(c: Context, error: unknown) {
   return c.json({ error: { code: normalized.code, message: normalized.message, retryable: normalized.retryable, reauthorizationRequired: normalized.code === 'AUTHORIZATION_EXPIRED' } }, normalized.status as 400)
 }
 
-async function requireOperator(c: Context<{ Bindings: Env }>, next: Next) {
-  try {
-    const config = getConfig(c.env)
-    if (!(await hasSession(c, config.sessionSecret))) return c.json({ error: { code: 'UNAUTHORIZED', message: 'Operator sign-in is required.' } }, 401)
-    await next()
-  } catch (error) { return jsonError(c, error) }
-}
-
 function provider(env: Env): MetaThreadsProvider { return new MetaThreadsProvider(getConfig(env)) }
-function connectionStore(env: Env): D1ConnectionStore { return new D1ConnectionStore(env.DB, getConfig(env).sessionSecret) }
+function connectionStore(env: Env): D1ConnectionStore { return new D1ConnectionStore(env.DB, env.SESSION_SECRET?.trim() || '') }
 function auditStore(env: Env): D1AuditStore { return new D1AuditStore(env.DB) }
 function oauthService(env: Env): OAuthService {
   return new OAuthService(provider(env), new D1OAuthStateStore(env.DB), connectionStore(env), () => new Date(), auditStore(env))
@@ -54,40 +44,25 @@ function limit(c: Context): number | undefined {
   return value ? Number(value) : undefined
 }
 
+app.all('/api/session', (c) => c.json({ error: { code: 'NOT_FOUND', message: 'No in-app operator session is used.' } }, 404))
+
 app.get('/api/configuration', (c) => {
   const missing = missingConfiguration(c.env)
-  return c.json({ status: missing.length ? 'not_configured' : 'supported', missing })
+  const readiness = {
+    threadsAppId: c.env.THREADS_APP_ID?.trim() ? 'configured' : 'missing',
+    threadsAppSecret: c.env.THREADS_APP_SECRET?.trim() ? 'configured' : 'missing',
+    redirectUri: c.env.THREADS_REDIRECT_URI?.trim() ? 'configured' : 'missing',
+    apiBaseUrl: 'configured',
+    sessionSecret: c.env.SESSION_SECRET?.trim() && c.env.SESSION_SECRET.length >= 32 ? 'configured' : 'missing',
+  } as const
+  return c.json({ status: missing.length ? 'not_configured' : 'supported', missing, readiness })
 })
-
-app.get('/api/session', async (c) => {
-  try {
-    if (missingConfiguration(c.env).length) return c.json({ authenticated: false })
-    return c.json({ authenticated: await hasSession(c, getConfig(c.env).sessionSecret) })
-  } catch { return c.json({ authenticated: false }) }
-})
-
-app.post('/api/session', async (c) => {
-  try {
-    const config = getConfig(c.env)
-    const body: { password?: string } = await c.req.json<{ password?: string }>().catch(() => ({}))
-    if (!body.password || !(await constantTimeEqual(body.password, config.operatorPassword))) {
-      return c.json({ error: { code: 'INVALID_CREDENTIALS', message: 'The operator password is incorrect.' } }, 401)
-    }
-    await createSession(c, config.sessionSecret)
-    return c.json({ authenticated: true })
-  } catch (error) { return jsonError(c, error) }
-})
-
-app.delete('/api/session', (c) => { clearSession(c); return c.json({ authenticated: false }) })
-app.use('/api/connection/*', requireOperator)
-app.use('/api/read/*', requireOperator)
-app.use('/api/publish/*', requireOperator)
-app.use('/api/audit/*', requireOperator)
-app.use('/auth/threads/*', requireOperator)
 
 app.get('/api/connection/status', async (c) => {
-  try { return c.json(await connectionStore(c.env).getSafe()) }
-  catch (error) { return jsonError(c, error) }
+  try {
+    if (!c.env.SESSION_SECRET?.trim()) return c.json({ status: 'disconnected' as const })
+    return c.json(await connectionStore(c.env).getSafe())
+  } catch (error) { return jsonError(c, error) }
 })
 
 app.post('/api/connection/disconnect', async (c) => {
@@ -148,7 +123,7 @@ app.get('/auth/threads/start', async (c) => {
   try { return c.redirect((await oauthService(c.env).start()).authorizationUrl, 302) }
   catch (error) {
     const normalized = safeError(error)
-    return c.redirect(`/settings?result=error&code=${encodeURIComponent(normalized.code)}`, 302)
+    return c.redirect(`/setup?result=error&code=${encodeURIComponent(normalized.code)}`, 302)
   }
 })
 
@@ -158,15 +133,15 @@ app.get('/auth/threads/callback', async (c) => {
       state: c.req.query('state'), code: c.req.query('code'), error: c.req.query('error'),
       errorDescription: c.req.query('error_description'),
     })
-    return c.redirect('/settings?result=connected', 303)
+    return c.redirect('/setup?result=connected', 303)
   } catch (error) {
     const normalized = safeError(error)
-    return c.redirect(`/settings?result=error&code=${encodeURIComponent(normalized.code)}`, 303)
+    return c.redirect(`/setup?result=error&code=${encodeURIComponent(normalized.code)}`, 303)
   }
 })
 
-type PageName = 'dashboard' | 'posts' | 'post-detail' | 'compose' | 'engagement' | 'insights' | 'activity' | 'settings'
-const titles: Record<PageName, string> = { dashboard: 'Dashboard', posts: 'Posts', 'post-detail': 'Post detail', compose: 'Compose', engagement: 'Engagement', insights: 'Insights', activity: 'Activity', settings: 'Connection & Settings' }
+type PageName = 'setup' | 'dashboard' | 'posts' | 'post-detail' | 'compose' | 'engagement' | 'insights' | 'activity' | 'settings'
+const titles: Record<PageName, string> = { setup: 'Personal Operator Setup', dashboard: 'Dashboard', posts: 'Posts', 'post-detail': 'Post detail', compose: 'Compose', engagement: 'Engagement', insights: 'Insights', activity: 'Activity', settings: 'Connection & Settings' }
 
 function navLink(active: PageName, name: PageName, href: string, label: string): string {
   return `<a class="${active === name ? 'active' : ''}" href="${href}">${label}</a>`
@@ -179,16 +154,16 @@ function page(active: PageName) {
 <body data-page="${active}"><a class="skip-link" href="#main-content">Skip to content</a>
 <div class="app-shell"><aside class="sidebar"><a class="brand" href="/"><span class="brand-mark">T</span><span>Threads Tools</span></a>
 <nav aria-label="Primary navigation">${navLink(active, 'dashboard', '/', 'Dashboard')}${navLink(active, 'posts', '/posts', 'Posts')}${navLink(active, 'compose', '/compose', 'Compose')}${navLink(active, 'engagement', '/engagement', 'Engagement')}${navLink(active, 'insights', '/insights', 'Insights')}${navLink(active, 'activity', '/activity', 'Activity')}${navLink(active, 'settings', '/settings', 'Connection / Settings')}</nav>
-<p class="phase-label">Phase 4 · Operator polish</p></aside>
-<main id="main-content"><header class="topbar"><div><p class="eyebrow">Operator console</p><h1>${titles[active]}</h1></div><button id="sign-out" class="button ghost hidden" type="button">Sign out</button></header>
+<p class="phase-label">Phase 5 · Personal setup</p></aside>
+<main id="main-content"><header class="topbar"><div><p class="eyebrow">Personal operator console</p><h1>${titles[active]}</h1></div>${active === 'setup' ? '<a class="button ghost" href="/settings">Settings</a>' : '<a class="button ghost" href="/setup">Review setup</a>'}</header>
 <section id="configuration-alert" class="alert warning hidden" role="status"></section>
-<section id="login-panel" class="panel auth-panel hidden" aria-labelledby="login-title"><p class="eyebrow">Protected workspace</p><h2 id="login-title">Operator sign in</h2><p>Enter the server-configured operator password to access real Threads data.</p><form id="login-form"><label class="sr-only" for="operator-username">Username</label><input class="sr-only" id="operator-username" name="username" type="text" autocomplete="username" value="operator" tabindex="-1"><label for="password">Operator password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button class="button primary" type="submit">Sign in</button><p id="login-error" class="form-error" role="alert"></p></form></section>
-<section id="workspace" class="hidden">${content(active)}</section>
+<section id="workspace">${content(active)}</section>
 </main></div><script type="module" src="/static/app.js"></script></body></html>`
 }
 
 function content(active: PageName): string {
-  if (active === 'settings') return `<div class="page-intro"><p>Connect one real Threads account through the server-side OAuth flow. Reconnect to grant Phase 3 publishing and existing read permissions.</p></div><section class="panel" aria-labelledby="connection-title"><div class="panel-heading"><div><p class="eyebrow">Threads account</p><h2 id="connection-title">Connection status</h2></div><span id="status-badge" class="badge neutral">Checking</span></div><div id="connection-loading" class="skeleton-lines"><span></span><span></span></div><div id="connection-content" class="hidden"></div></section><section class="panel security-note"><h2>Security boundary</h2><p>Authorization codes and tokens remain server-side. Tokens are encrypted in D1 and provider responses are normalized before reaching this browser.</p></section>`
+  if (active === 'setup') return `<div class="page-intro"><p>Verify the private operator configuration, connect the owner’s Threads account, and continue directly to the dashboard.</p></div><section class="panel setup-panel" aria-labelledby="setup-welcome-title"><p class="eyebrow">First run</p><h2 id="setup-welcome-title">Welcome to your personal operator console</h2><p>This is a private single-owner tool, not an account registration or team setup flow. Server secrets are checked only as safe readiness states and are never shown in this browser.</p></section><section class="panel" aria-labelledby="readiness-title"><div class="panel-heading"><div><p class="eyebrow">Server-side configuration</p><h2 id="readiness-title">Configuration readiness</h2></div><span id="setup-config-badge" class="badge neutral">Checking</span></div><div id="setup-readiness" class="readiness-list"><div class="skeleton-lines"><span></span><span></span></div></div><p class="muted-text">Values remain in Cloudflare server secrets. This page receives only Configured or Missing status.</p></section><section class="panel" aria-labelledby="setup-connection-title"><div class="panel-heading"><div><p class="eyebrow">Threads account</p><h2 id="setup-connection-title">Connection</h2></div><span id="setup-connection-badge" class="badge neutral">Checking</span></div><div id="setup-connection"><div class="skeleton-lines"><span></span></div></div></section>`
+  if (active === 'settings') return `<div class="page-intro"><p>Connect one real Threads account through the server-side OAuth flow. Reconnect to grant publishing and existing read permissions.</p></div><section class="panel compact-panel"><div class="connected-strip"><span class="badge neutral">Personal setup</span><div><strong>Review setup at any time</strong><p>Check safe configuration readiness and connection state without exposing server values.</p></div><a class="button secondary" href="/setup">Open setup</a></div></section><section class="panel" aria-labelledby="connection-title"><div class="panel-heading"><div><p class="eyebrow">Threads account</p><h2 id="connection-title">Connection status</h2></div><span id="status-badge" class="badge neutral">Checking</span></div><div id="connection-loading" class="skeleton-lines"><span></span><span></span></div><div id="connection-content" class="hidden"></div></section><section class="panel security-note"><h2>Security boundary</h2><p>Authorization codes and tokens remain server-side. Tokens are encrypted in D1 and provider responses are normalized before reaching this browser. This app has no separate in-app operator password; protect a public deployment with Cloudflare Access.</p></section>`
   if (active === 'dashboard') return `<section class="dashboard-actions"><a class="button primary" href="/compose">Compose post</a><a class="button secondary" href="/posts">Browse posts</a></section><section id="dashboard-health" class="panel state-panel" aria-live="polite"><div class="skeleton-lines"><span></span></div></section><section id="dashboard-account" class="panel state-panel" aria-live="polite"><div class="skeleton-lines"><span></span><span></span></div></section><section class="summary-grid"><article id="dashboard-engagement" class="panel state-panel"><div class="skeleton-lines"><span></span><span></span></div></article><article id="dashboard-insights" class="panel state-panel"><div class="skeleton-lines"><span></span><span></span></div></article></section><section class="panel"><div class="panel-heading"><div><p class="eyebrow">Latest activity</p><h2>Recent posts</h2></div><a href="/posts">View all</a></div><div id="dashboard-posts" class="post-list"><div class="skeleton-lines"><span></span><span></span></div></div></section>`
   if (active === 'posts') return `<div class="page-intro"><p>Search and sort only the bounded pages loaded below. Load More preserves provider cursor pagination.</p></div><section class="panel"><div class="panel-heading"><div><p class="eyebrow">Owned media</p><h2>Your Threads posts</h2></div><span id="posts-count" class="badge neutral">Loading</span></div><form id="posts-controls" class="operator-controls" role="search"><label for="posts-search">Search loaded post text</label><input id="posts-search" type="search" placeholder="Search loaded posts…"><label for="posts-sort">Sort</label><select id="posts-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></form><p id="posts-filter-note" class="muted-text" role="status"></p><div id="posts-list" class="post-list"><div class="skeleton-lines"><span></span><span></span></div></div><button id="load-more-posts" class="button secondary hidden" type="button">Load more</button></section>`
   if (active === 'post-detail') return `<div class="page-intro"><a class="text-link" href="/posts">← Back to posts</a><p>Real post context, available metrics, and top-level replies.</p></div><section id="post-detail" class="panel" aria-live="polite"><div class="skeleton-lines"><span></span><span></span></div></section><section class="summary-grid"><article class="panel"><div class="panel-heading"><div><p class="eyebrow">Available metrics</p><h2>Post insights</h2></div></div><div id="post-detail-metrics" class="metric-grid"><div class="skeleton-lines"><span></span></div></div></article><article class="panel"><div class="panel-heading"><div><p class="eyebrow">Engagement</p><h2>Top-level replies</h2></div></div><div id="post-detail-replies"><div class="skeleton-lines"><span></span></div></div></article></section>`
@@ -198,6 +173,7 @@ function content(active: PageName): string {
   return `<div class="page-intro"><p>Metrics currently exposed by the Threads Insights API. Unavailable values remain unavailable rather than becoming zero.</p></div><section class="panel"><div class="panel-heading"><div><p class="eyebrow">Period comparison</p><h2>Account metric comparison</h2></div><label for="insight-period">Period <select id="insight-period"><option value="7">7 days</option><option value="14">14 days</option><option value="30">30 days</option></select></label></div><div id="insight-comparison" class="comparison-list"><div class="skeleton-lines"><span></span></div></div></section><section class="panel"><div class="panel-heading"><div><p class="eyebrow">Account</p><h2>Account insights</h2></div><span id="account-insights-status" class="badge neutral">Loading</span></div><div id="account-insights" class="metric-grid"><div class="skeleton-lines"><span></span><span></span></div></div></section><section class="panel"><div class="panel-heading"><div><p class="eyebrow">Content</p><h2>Post insights</h2></div></div><div id="insight-posts" class="insight-list"><div class="skeleton-lines"><span></span><span></span></div></div></section>`
 }
 
+app.get('/setup', (c) => c.html(page('setup')))
 app.get('/', (c) => c.html(page('dashboard')))
 app.get('/posts', (c) => c.html(page('posts')))
 app.get('/posts/:id', (c) => c.html(page('post-detail')))
@@ -207,7 +183,7 @@ app.get('/insights', (c) => c.html(page('insights')))
 app.get('/activity', (c) => c.html(page('activity')))
 app.get('/settings', (c) => c.html(page('settings')))
 
+app.all('*', (c) => c.html('<h1>Not found</h1><p><a href="/">Return to Threads Tools</a></p>', 404))
 app.onError((error, c) => jsonError(c, error))
-app.notFound((c) => c.html('<h1>Not found</h1><p><a href="/">Return to Threads Tools</a></p>', 404))
 
 export default app

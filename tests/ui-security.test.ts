@@ -2,18 +2,107 @@ import { describe, expect, it } from 'vitest'
 import { readFile } from 'node:fs/promises'
 import app from '../src/index'
 
-describe('Phase 4 UI and browser security boundary', () => {
+function environment(connection?: Record<string, string | null>) {
+  const statement = {
+    bind() { return statement },
+    async first() { return connection ?? null },
+    async run() { return { meta: { changes: 0 } } },
+    async all() { return { results: [] } },
+  }
+  return {
+    DB: { prepare: () => statement },
+    THREADS_APP_ID: 'public-app-id',
+    THREADS_APP_SECRET: 'server-secret-value',
+    THREADS_REDIRECT_URI: 'https://app.example.com/auth/threads/callback',
+    THREADS_API_BASE_URL: 'https://graph.threads.com',
+    SESSION_SECRET: 's'.repeat(32),
+  } as never
+}
+
+function environmentMissing() {
+  const statement = {
+    bind() { return statement },
+    async first() { return null },
+    async run() { return { meta: { changes: 0 } } },
+    async all() { return { results: [] } },
+  }
+  return { DB: { prepare: () => statement } } as never
+}
+
+describe('Phase 5 UI and browser security boundary', () => {
   it.each([
-    ['/', 'Recent posts'], ['/posts', 'Your Threads posts'], ['/posts/10', 'Post insights'], ['/engagement', 'Top-level replies'],
+    ['/setup', 'Personal Operator Setup'], ['/', 'Recent posts'], ['/posts', 'Your Threads posts'], ['/posts/10', 'Post insights'], ['/engagement', 'Top-level replies'],
     ['/compose', 'Create a Thread'], ['/insights', 'Account metric comparison'], ['/activity', 'Recent activity'], ['/settings', 'Connection status'],
-  ])('renders the real-data workspace shell for %s', async (path, label) => {
+  ])('renders the directly accessible real-data workspace shell for %s', async (path, label) => {
     const response = await app.request(path)
     const html = await response.text()
     expect(response.status).toBe(200)
     expect(html).toContain(label)
-    expect(html).toContain('Operator sign in')
+    expect(html).not.toContain('Operator sign in')
+    expect(html).not.toContain('type="password"')
     expect(html).not.toContain('server-secret')
     expect(html).not.toContain('access_token')
+  })
+
+  it('has no operator session/password endpoint or gate', async () => {
+    const [session, dashboard, posts, insights] = await Promise.all([
+      app.request('/api/session', { method: 'POST', body: JSON.stringify({ password: 'guess' }) }),
+      app.request('/'), app.request('/posts'), app.request('/insights'),
+    ])
+    expect(session.status).toBe(404)
+    expect(dashboard.status).toBe(200)
+    expect(posts.status).toBe(200)
+    expect(insights.status).toBe(200)
+  })
+
+  it('returns only safe configuration readiness states', async () => {
+    const configured = await app.request('/api/configuration', undefined, environment())
+    const configuredBody = await configured.json<Record<string, unknown>>()
+    expect(configuredBody).toMatchObject({
+      status: 'supported',
+      readiness: {
+        threadsAppId: 'configured', threadsAppSecret: 'configured', redirectUri: 'configured',
+        apiBaseUrl: 'configured', sessionSecret: 'configured',
+      },
+    })
+    const payload = JSON.stringify(configuredBody)
+    expect(payload).not.toContain('server-secret-value')
+    expect(payload).not.toContain('public-app-id')
+
+    const missing = await app.request('/api/configuration', undefined, environmentMissing())
+    expect(await missing.json()).toMatchObject({
+      status: 'not_configured',
+      readiness: { threadsAppId: 'missing', threadsAppSecret: 'missing', redirectUri: 'missing', sessionSecret: 'missing' },
+    })
+  })
+
+  it('reports connected, disconnected, and expired connection state without credentials', async () => {
+    const connectedRow = {
+      account_id: '42', username: 'owner', display_name: 'Owner',
+      connected_at: '2026-09-11T10:00:00.000Z', token_expires_at: '2099-01-01T00:00:00.000Z',
+    }
+    const connected = await (await app.request('/api/connection/status', undefined, environment(connectedRow))).json<Record<string, unknown>>()
+    const disconnected = await (await app.request('/api/connection/status', undefined, environment())).json<Record<string, unknown>>()
+    const expired = await (await app.request('/api/connection/status', undefined, environment({ ...connectedRow, token_expires_at: '2020-01-01T00:00:00.000Z' }))).json<Record<string, unknown>>()
+    expect(connected).toMatchObject({ status: 'connected', accountId: '42', username: 'owner' })
+    expect(disconnected).toEqual({ status: 'disconnected' })
+    expect(expired).toMatchObject({ status: 'connected', tokenExpiresAt: '2020-01-01T00:00:00.000Z' })
+    expect(JSON.stringify([connected, disconnected, expired])).not.toContain('accessToken')
+  })
+
+  it('ships a bounded personal first-run and completed-state flow', async () => {
+    const [setup, script] = await Promise.all([
+      app.request('/setup'),
+      readFile(new URL('../public/static/app.js', import.meta.url), 'utf8'),
+    ])
+    const html = await setup.text()
+    expect(html).toContain('Configuration readiness')
+    expect(html).toContain('Server secrets are checked only as safe readiness states')
+    expect(script).toContain("localStorage.getItem(ONBOARDING_KEY) === 'true'")
+    expect(script).toContain("localStorage.setItem(ONBOARDING_KEY, 'true')")
+    expect(script).toContain('Continue to Dashboard')
+    expect(script).toContain("location.replace('/setup')")
+    expect(script).toContain('Reconnect required')
   })
 
   it('contains compose validation, preview, publishing, duplicate-click, success, error, and unsupported-media states', async () => {

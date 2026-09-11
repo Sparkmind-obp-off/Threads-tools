@@ -5,7 +5,7 @@ const completeEnv = {
   THREADS_APP_ID: '123', THREADS_APP_SECRET: 'secret',
   THREADS_REDIRECT_URI: 'https://app.example.com/auth/threads/callback',
   THREADS_API_BASE_URL: 'https://graph.threads.com', THREADS_API_VERSION: 'v1.0',
-  SESSION_SECRET: 'a'.repeat(32), OPERATOR_PASSWORD: 'strong-password',
+  SESSION_SECRET: 'a'.repeat(32),
 } as Env
 
 describe('environment configuration', () => {
@@ -13,6 +13,7 @@ describe('environment configuration', () => {
     const missing = missingConfiguration({} as Env)
     expect(missing).toContain('Threads App ID')
     expect(missing).toContain('Threads App Secret')
+    expect(missing).not.toContain('Operator password')
     expect(() => getConfig({} as Env)).toThrowError(/Configuration required/)
   })
 

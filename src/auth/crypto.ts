@@ -64,12 +64,3 @@ export async function decryptToken(value: string, secret: string): Promise<strin
   )
   return decoder.decode(decrypted)
 }
-
-export async function constantTimeEqual(left: string, right: string): Promise<boolean> {
-  const leftHash = await crypto.subtle.digest('SHA-256', encoder.encode(left))
-  const rightHash = await crypto.subtle.digest('SHA-256', encoder.encode(right))
-  const a = new Uint8Array(leftHash); const b = new Uint8Array(rightHash)
-  let diff = 0
-  for (let i = 0; i < a.length; i++) diff |= a[i] ^ b[i]
-  return diff === 0
-}

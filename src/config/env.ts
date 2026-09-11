@@ -8,7 +8,6 @@ export interface Env {
   THREADS_API_BASE_URL?: string
   THREADS_API_VERSION?: string
   SESSION_SECRET?: string
-  OPERATOR_PASSWORD?: string
 }
 
 export interface AppConfig {
@@ -18,7 +17,6 @@ export interface AppConfig {
   threadsApiBaseUrl: string
   threadsApiVersion: string
   sessionSecret: string
-  operatorPassword: string
 }
 
 const required: Array<[keyof Env, string]> = [
@@ -26,7 +24,6 @@ const required: Array<[keyof Env, string]> = [
   ['THREADS_APP_SECRET', 'Threads App Secret'],
   ['THREADS_REDIRECT_URI', 'Threads redirect URI'],
   ['SESSION_SECRET', 'Session secret'],
-  ['OPERATOR_PASSWORD', 'Operator password'],
 ]
 
 export function missingConfiguration(env: Env): string[] {
@@ -56,6 +53,5 @@ export function getConfig(env: Env): AppConfig {
     threadsApiBaseUrl: baseUrl.replace(/\/$/, ''),
     threadsApiVersion: env.THREADS_API_VERSION?.trim() || 'v1.0',
     sessionSecret: env.SESSION_SECRET!,
-    operatorPassword: env.OPERATOR_PASSWORD!,
   }
 }

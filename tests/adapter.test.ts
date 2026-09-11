@@ -6,7 +6,7 @@ const config: AppConfig = {
   threadsAppId: '123', threadsAppSecret: 'server-secret',
   threadsRedirectUri: 'https://app.example.com/auth/threads/callback',
   threadsApiBaseUrl: 'https://graph.threads.com', threadsApiVersion: 'v1.0',
-  sessionSecret: 'x'.repeat(32), operatorPassword: 'password',
+  sessionSecret: 'x'.repeat(32),
 }
 
 function response(payload: unknown, status = 200) {

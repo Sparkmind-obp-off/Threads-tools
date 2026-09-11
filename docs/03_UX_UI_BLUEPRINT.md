@@ -1,5 +1,11 @@
 # 03 — UX/UI Blueprint
 
+## Personal first run
+
+`/setup` provides one short single-owner flow: safe server configuration readiness, current Threads connection state, existing Connect/Reconnect OAuth action, and Continue to Dashboard after connection. Completion is recorded only as a browser-local boolean so it does not repeat unnecessarily; Setup remains available from Settings/header navigation.
+
+There is no registration, organization, team, billing, role, invite, or in-app operator-password step.
+
 ## Navigation
 
 - Dashboard
@@ -8,6 +14,7 @@
 - Engagement
 - Insights
 - Connection / Settings
+- Review Setup
 
 ## Dashboard
 

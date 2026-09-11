@@ -1,9 +1,8 @@
 const $ = (selector) => document.querySelector(selector)
 const page = document.body.dataset.page
 const configurationAlert = $('#configuration-alert')
-const loginPanel = $('#login-panel')
 const workspace = $('#workspace')
-const signOut = $('#sign-out')
+const ONBOARDING_KEY = 'threads-tools:personal-setup-complete'
 
 const errorMessages = {
   OAUTH_CANCELLED: 'Threads authorization was cancelled. Your existing connection was not changed.',
@@ -66,16 +65,14 @@ function showConfiguration(data) {
   configurationAlert.innerHTML = `<strong>Configuration required</strong><p>The server is missing: ${data.missing.map(escapeHtml).join(', ')}. Add these values as server secrets before connecting Threads.</p>`
 }
 
-function showLogin() {
-  loginPanel.classList.remove('hidden')
-  workspace.classList.add('hidden')
-  signOut.classList.add('hidden')
+function setupWasCompleted() {
+  try { return localStorage.getItem(ONBOARDING_KEY) === 'true' }
+  catch { return true }
 }
 
-function showWorkspace() {
-  loginPanel.classList.add('hidden')
-  workspace.classList.remove('hidden')
-  signOut.classList.remove('hidden')
+function completeSetup() {
+  try { localStorage.setItem(ONBOARDING_KEY, 'true') } catch { /* storage is optional */ }
+  location.assign('/')
 }
 
 function recoveryState(error) {
@@ -166,6 +163,65 @@ async function loadSettings() {
     $('#connection-content').classList.remove('hidden')
     $('#connection-content').innerHTML = recoveryState(error)
   }
+}
+
+function readinessRow(label, status) {
+  const configured = status === 'configured'
+  return `<div class="readiness-row"><span>${escapeHtml(label)}</span><span class="badge ${configured ? 'supported' : 'warning'}">${configured ? 'Configured' : 'Missing'}</span></div>`
+}
+
+async function loadSetup() {
+  const configBadge = $('#setup-config-badge')
+  const readiness = $('#setup-readiness')
+  const connectionBadge = $('#setup-connection-badge')
+  const connectionNode = $('#setup-connection')
+  const [configuration, connection] = await Promise.allSettled([
+    request('/api/configuration'), request('/api/connection/status'),
+  ])
+
+  let configurationReady = false
+  if (configuration.status === 'fulfilled') {
+    const data = configuration.value
+    configurationReady = data.status === 'supported'
+    configBadge.className = `badge ${configurationReady ? 'supported' : 'warning'}`
+    configBadge.textContent = configurationReady ? 'Ready' : 'Action needed'
+    readiness.innerHTML = [
+      ['Threads App ID', data.readiness.threadsAppId],
+      ['Threads App Secret', data.readiness.threadsAppSecret],
+      ['Redirect URI', data.readiness.redirectUri],
+      ['API Base URL', data.readiness.apiBaseUrl],
+      ['Secure token key', data.readiness.sessionSecret],
+    ].map(([label, status]) => readinessRow(label, status)).join('')
+  } else {
+    configBadge.className = 'badge danger'; configBadge.textContent = 'Error'
+    readiness.innerHTML = recoveryState(configuration.reason)
+  }
+
+  if (connection.status === 'rejected') {
+    connectionBadge.className = 'badge danger'; connectionBadge.textContent = 'Error'
+    connectionNode.innerHTML = recoveryState(connection.reason)
+    return
+  }
+
+  const value = connection.value
+  if (value.status !== 'connected') {
+    connectionBadge.className = 'badge neutral'; connectionBadge.textContent = 'Disconnected'
+    connectionNode.innerHTML = configurationReady
+      ? '<div class="empty-state"><h3>Connect the owner’s Threads account</h3><p>The existing server-side OAuth flow will validate state and store the resulting token encrypted in D1.</p><a class="button primary" href="/auth/threads/start">Connect Threads</a></div>'
+      : '<div class="empty-state"><h3>Finish server configuration first</h3><p>Add the missing values as server-side secrets, then return here to connect Threads.</p></div>'
+    showResultNotice(connectionNode)
+    return
+  }
+
+  const expired = value.tokenExpiresAt && new Date(value.tokenExpiresAt).getTime() <= Date.now()
+  connectionBadge.className = `badge ${expired ? 'warning' : 'supported'}`
+  connectionBadge.textContent = expired ? 'Reconnect required' : 'Connected'
+  const identity = value.username ? `@${escapeHtml(value.username)}` : escapeHtml(value.displayName || `Account ${value.accountId}`)
+  connectionNode.innerHTML = expired
+    ? `<div class="empty-state"><h3>Threads authorization needs attention</h3><p>${identity} is stored, but its authorization has expired. Reconnect securely to continue.</p>${configurationReady ? '<a class="button primary" href="/auth/threads/start">Reconnect Threads</a>' : ''}</div>`
+    : `<div class="setup-success"><h3>${identity} is connected</h3><p>Personal setup is ready. Continue into the existing operator dashboard.</p><div class="actions"><button id="continue-dashboard" class="button primary" type="button">Continue to Dashboard</button><a class="button secondary" href="/auth/threads/start">Reconnect Threads</a></div></div>`
+  $('#continue-dashboard')?.addEventListener('click', completeSetup)
+  showResultNotice(connectionNode)
 }
 
 async function loadDashboard() {
@@ -468,7 +524,7 @@ async function publishCompose(event) {
 }
 
 async function loadWorkspace() {
-  showWorkspace()
+  if (page === 'setup') return loadSetup()
   if (page === 'settings') return loadSettings()
   if (page === 'dashboard') return loadDashboard()
   if (page === 'posts') return loadPosts()
@@ -479,15 +535,6 @@ async function loadWorkspace() {
   if (page === 'activity') return loadAudit()
 }
 
-$('#login-form')?.addEventListener('submit', async (event) => {
-  event.preventDefault()
-  const button = event.currentTarget.querySelector('button'); const errorNode = $('#login-error')
-  button.disabled = true; button.textContent = 'Signing in…'; errorNode.textContent = ''
-  try { await request('/api/session', { method: 'POST', body: JSON.stringify({ password: $('#password').value }) }); $('#password').value = ''; await loadWorkspace() }
-  catch (error) { errorNode.textContent = error.message }
-  finally { button.disabled = false; button.textContent = 'Sign in' }
-})
-
 $('#post-text')?.addEventListener('input', () => { if (!composePublishing && !composeLocked) composeRequestId = undefined; composeValidation() })
 $('#compose-form')?.addEventListener('submit', publishCompose)
 $('#load-more-posts')?.addEventListener('click', () => { $('#load-more-posts').textContent = 'Loading…'; loadPosts(true) })
@@ -496,15 +543,13 @@ $('#posts-sort')?.addEventListener('change', renderLoadedPosts)
 $('#insight-period')?.addEventListener('change', loadInsightComparison)
 $('#load-more-replies')?.addEventListener('click', () => { $('#load-more-replies').textContent = 'Loading…'; loadReplies(selectedPostId, true) })
 $('#load-more-audit')?.addEventListener('click', () => { $('#load-more-audit').textContent = 'Loading…'; loadAudit(true) })
-signOut?.addEventListener('click', async () => { await request('/api/session', { method: 'DELETE' }); showLogin() })
-
 async function init() {
-  try { showConfiguration(await request('/api/configuration')) } catch { /* public status is best effort */ }
-  try {
-    const session = await request('/api/session')
-    if (!session.authenticated) return showLogin()
-    await loadWorkspace()
-  } catch { showLogin() }
+  try { showConfiguration(await request('/api/configuration')) } catch { /* safe readiness is best effort */ }
+  if (page !== 'setup' && !setupWasCompleted()) {
+    location.replace('/setup')
+    return
+  }
+  await loadWorkspace()
 }
 
 init()

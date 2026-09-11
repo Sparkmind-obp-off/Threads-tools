@@ -4,7 +4,7 @@
 
 All provider operations follow:
 
-`Browser → authenticated Threads Tools API → server-side Threads adapter → graph.threads.com`
+`Private browser session (deployment-level access) → Threads Tools API → server-side Threads adapter → graph.threads.com`
 
 The browser never receives the App Secret, access token, OAuth code, provider authorization header, or raw provider payload. Provider responses are allow-listed and normalized in `src/threads/normalizers.ts`.
 
@@ -15,10 +15,9 @@ The browser never receives the App Secret, access token, OAuth code, provider au
 - `THREADS_REDIRECT_URI`
 - `THREADS_API_BASE_URL` (optional; defaults to `https://graph.threads.com`)
 - `THREADS_API_VERSION` (optional; defaults to `v1.0`)
-- `SESSION_SECRET`
-- `OPERATOR_PASSWORD`
+- `SESSION_SECRET` (token-encryption key material)
 
-Secrets must be supplied through `.dev.vars` locally or Cloudflare Pages secrets in production.
+Secrets must be supplied through `.dev.vars` locally or Cloudflare Pages secrets in production. There is no separate in-app operator password. Protect a publicly reachable deployment with Cloudflare Access or equivalent deployment-level private access, covering pages, APIs, and OAuth routes.
 
 ## Current official Phase 2/3 contract
 
@@ -133,6 +132,12 @@ Provider code `190` or HTTP 401 maps to a re-authentication instruction. Permiss
 - `reauthorization_required` — the provider rejected or the stored credential expired and the operator must reconnect.
 
 Missing metric values remain absent/undefined and are never converted to zero.
+
+## Phase 5 application endpoints
+
+- `GET /api/configuration` returns only allow-listed `configured` / `missing` readiness states and safe missing labels; no environment value is returned.
+- `GET /api/connection/status` returns only normalized account/connection metadata and never credentials.
+- The removed `/api/session` password endpoint is not replaced by another application password. Private URL access belongs at the deployment layer.
 
 ## Phase 4 application endpoints
 

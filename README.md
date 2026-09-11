@@ -1,6 +1,6 @@
 # Threads Tools
 
-A small, production-oriented operator console for securely connecting one Threads professional/personal-brand account, publishing real text posts, and reading trustworthy owned-account data. This is an application, not a raw API tester.
+A private personal operator console for securely connecting one owner’s Threads professional/personal-brand account, publishing real text posts, and reading trustworthy owned-account data. This is neither a SaaS product nor a raw API tester.
 
 ## Current status
 
@@ -8,7 +8,7 @@ A small, production-oriented operator console for securely connecting one Thread
 
 Implemented:
 
-- Password-protected operator workspace with signed `HttpOnly`, `SameSite=Lax` session cookie
+- Private single-owner workspace with deployment-level access protection when hosted on a public URL
 - Server-side Threads OAuth with cryptographically random, single-use state
 - Short-lived and long-lived token exchange
 - AES-GCM encryption before token persistence in Cloudflare D1
@@ -51,6 +51,17 @@ Implemented:
 - Safe D1-backed operational activity for connection and publishing events, with bounded cursor pagination and no content/credential payloads
 - Consistent empty, unsupported, error, and reauthorization-required states
 
+### Phase 5 — Personal Setup
+
+Implemented:
+
+- Removed the undocumented in-app operator-password gate and obsolete session endpoint
+- Short first-run `/setup` flow with safe Configured/Missing readiness states
+- Existing secure Threads OAuth connection/reconnection with post-callback dashboard continuation
+- Browser-local, non-sensitive onboarding completion marker so setup does not repeat unnecessarily
+- Setup review entry from the operator header and Connection/Settings
+- No registration, team, billing, invite, role, tenant, or other SaaS flows
+
 Not implemented:
 
 - Image, video, or carousel publishing (public media hosting/processing is not configured)
@@ -74,6 +85,7 @@ Provider calls live in `src/threads/`, orchestration in `src/services/`, session
 
 | Method | URI | Purpose |
 |---|---|---|
+| `GET` | `/setup` | Personal first-run configuration and Threads connection flow |
 | `GET` | `/` | Real-data operator dashboard |
 | `GET` | `/posts` | Owned Threads posts with bounded local search/sort and Load More |
 | `GET` | `/posts/:id` | Real post detail, available metrics, and top-level reply context |
@@ -85,12 +97,11 @@ Provider calls live in `src/threads/`, orchestration in `src/services/`, session
 
 ### Safe application APIs
 
-All connection/read routes require an authenticated operator session.
+There is no separate in-app operator password or application sign-in. Because this is a private personal tool, protect publicly reachable production routes with deployment-level access control such as Cloudflare Access. Threads OAuth state validation and encrypted server-side token persistence remain authoritative for the provider connection.
 
 | Method | URI | Purpose |
 |---|---|---|
 | `GET` | `/api/configuration` | Safe configured/missing state; no values |
-| `GET/POST/DELETE` | `/api/session` | Session status, sign-in, and sign-out |
 | `GET` | `/api/connection/status` | Normalized connection state |
 | `POST` | `/api/connection/disconnect` | Delete encrypted connection credential |
 | `GET` | `/api/read/account` | Current normalized account profile |
@@ -146,8 +157,7 @@ Copy `.env.example` to `.dev.vars` for local development. Never commit `.dev.var
 | `THREADS_REDIRECT_URI` | Yes | Exact OAuth callback URI |
 | `THREADS_API_BASE_URL` | No | Defaults to `https://graph.threads.com` |
 | `THREADS_API_VERSION` | No | Defaults to `v1.0` |
-| `SESSION_SECRET` | Yes | Minimum 32 characters; sessions and token encryption |
-| `OPERATOR_PASSWORD` | Yes | Protects the operator console |
+| `SESSION_SECRET` | Yes | Minimum 32 characters; token encryption key material |
 
 Production values must be Cloudflare Pages secrets, not committed configuration.
 
@@ -175,7 +185,7 @@ npm run build
 npm run preview
 ```
 
-Open `http://localhost:3000/settings`, sign in, and connect/reconnect Threads. Then open `http://localhost:3000/compose` to validate, preview, and publish a text post.
+Open `http://localhost:3000/setup`, review safe readiness states, and connect/reconnect Threads. Select **Continue to Dashboard**, then open `/compose` to validate, preview, and publish a text post. No separate in-app operator password exists.
 
 Quality gate:
 
@@ -190,7 +200,7 @@ npm run build
 1. Configure all secrets and apply the D1 migration.
 2. Register the exact local/production callback URI in Meta App Dashboard.
 3. Add the account as a Threads Tester and accept the invitation while the app is in development.
-4. Open `/settings`, sign in, and connect/reconnect.
+4. Open `/setup` and connect/reconnect through the existing OAuth flow.
 5. Grant `threads_basic`, `threads_content_publish`, `threads_read_replies`, and `threads_manage_insights`.
 6. Confirm the real account appears on `/` and `/compose` identifies the publishing account.
 7. Compose and explicitly publish one unique text post; confirm a real post ID and only provider-returned permalink/timestamp fields are shown.
@@ -205,22 +215,23 @@ npm run build
 Latest implementation gate:
 
 - TypeScript: passing
-- Automated tests: **54 passed / 54**
+- Automated tests: **59 passed / 59**
 - Production build: passing
 
-Automated tests cover provider success/errors, pagination, replies, period insight comparisons, post detail, safe audit allow-listing/pagination, text container creation, publish requests, validation, malformed responses, missing optional values, duplicate/ambiguous publish protection, capability states, operator UI states, and browser credential boundaries.
+Automated tests cover provider success/errors, pagination, replies, period insight comparisons, post detail, safe audit allow-listing/pagination, text container creation, publish requests, validation, malformed responses, missing optional values, duplicate/ambiguous publish protection, capability states, direct no-password access, first-run/completed onboarding markers, configuration readiness, connected/disconnected/expired connection states, and browser credential boundaries.
 
 ## Deployment
 
 - **Platform:** Cloudflare Pages + Hono + D1 (BYOK)
 - **Production:** https://threads-tools.pages.dev
 - **Deployment status:** Active; application shell and D1 schema deployed
-- **Provider configuration status:** Not configured in Cloudflare Pages secrets at the time of deployment
+- **Provider configuration status:** Verify through `/setup`; readiness responses expose statuses only, never values
+- **Private access:** Configure Cloudflare Access for all page, API, and OAuth routes before treating the public URL as private. The application intentionally has no in-app operator password.
 - **D1:** `threads-tools-production`; migrations `0001_phase1_connection.sql`, `0002_phase3_publish_requests.sql`, and `0003_phase4_audit_events.sql` required
 
 To activate the provider connection:
 
-1. Add all required environment values with Cloudflare Pages secrets.
+1. Add all required environment values with Cloudflare Pages secrets (`OPERATOR_PASSWORD` is not used).
 2. Set `THREADS_REDIRECT_URI=https://threads-tools.pages.dev/auth/threads/callback`.
 3. Add that exact URI to Meta's valid OAuth redirect URIs.
 4. Apply production D1 migrations and redeploy if necessary.
@@ -228,6 +239,6 @@ To activate the provider connection:
 
 ## Gate and next steps
 
-The Phase 4 implementation and automated quality gate pass. The Phase 4 product acceptance gate remains **BLOCKED — production Threads configuration and a real connected-account verification of dashboard, post detail, engagement, period insights, and preserved publishing are required**. Build success or a mocked provider test is not treated as real-world publishing proof.
+The Phase 5 implementation and automated quality gate pass. The final product acceptance gate remains **BLOCKED — production deployment-level private access and a real connected-account verification of onboarding, dashboard, post detail, engagement, period insights, and preserved publishing are required**. Build success or a mocked provider test is not treated as real-world provider proof.
 
-Smallest next action: add the seven documented environment variables as Cloudflare Pages secrets, configure Meta's callback URI, apply D1 migrations, reconnect with the Phase 3 scopes, and execute the real-account checklist above. Never paste secret values into source, GitHub, or chat.
+Smallest next action: configure Cloudflare Access, add the six documented server environment values as Cloudflare Pages secrets, configure Meta's callback URI, apply D1 migrations, connect with the existing scopes, and execute the real-account checklist above. Never paste secret values into source, GitHub, or chat.
