@@ -173,16 +173,21 @@ Automated tests cover provider success/errors, pagination, replies, insights, ex
 
 ## Deployment
 
-Target: Cloudflare Pages + Hono + D1.
+- **Platform:** Cloudflare Pages + Hono + D1 (BYOK)
+- **Production:** https://threads-tools.pages.dev
+- **Deployment status:** Active; application shell and D1 schema deployed
+- **Provider configuration status:** Not configured in Cloudflare Pages secrets at the time of deployment
+- **D1:** `threads-tools-production`, migration `0001_phase1_connection.sql` applied
 
-1. Create or select the production D1 database and place its non-secret ID in `wrangler.jsonc`.
-2. Apply `migrations/0001_phase1_connection.sql` remotely.
-3. Add all required environment values with Cloudflare Pages secrets.
-4. Build and deploy `dist/`.
-5. Update `THREADS_REDIRECT_URI` and Meta's valid OAuth callback to the final HTTPS URL, then reconnect.
+To activate the provider connection:
+
+1. Add all required environment values with Cloudflare Pages secrets.
+2. Set `THREADS_REDIRECT_URI=https://threads-tools.pages.dev/auth/threads/callback`.
+3. Add that exact URI to Meta's valid OAuth redirect URIs.
+4. Redeploy if necessary, then connect/reconnect from `/settings`.
 
 ## Gate and next steps
 
-The implementation and automated Phase 2 quality gate pass. The product acceptance gate remains **BLOCKED pending real-account verification** until an operator-owned connected account proves real posts and any granted reply/insight capabilities in the deployed environment.
+The implementation, deployment, D1 migration, and automated Phase 2 quality gate pass. The product acceptance gate remains **BLOCKED — production Threads secrets and real-account verification required**. The deployed app currently reports `not_configured` honestly because no production secret names are present.
 
-Recommended next action: complete the production OAuth callback/secrets setup, reconnect with Phase 2 scopes, and execute the real-account checklist above. Phase 3 publishing should begin only after that gate passes.
+Smallest next action: add the seven documented environment variables as Cloudflare Pages secrets, configure Meta's callback URI, reconnect with the Phase 2 scopes, and execute the real-account checklist above. Phase 3 publishing should begin only after that gate passes.
