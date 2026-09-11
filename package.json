@@ -1,0 +1,26 @@
+{
+  "name": "threads-tools",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:migrate:local": "wrangler d1 migrations apply threads-tools-production --local",
+    "preview": "wrangler pages dev dist --d1=threads-tools-production --local --ip 0.0.0.0 --port 3000"
+  },
+  "dependencies": {
+    "hono": "^4.9.7"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260911.1",
+    "@hono/vite-cloudflare-pages": "^0.4.2",
+    "typescript": "^5.9.2",
+    "vite": "^5.4.19",
+    "vitest": "^2.1.9",
+    "wrangler": "^4.131.0"
+  }
+}
