@@ -74,6 +74,25 @@ export interface CapabilityResult<T> {
   reauthorizationRequired?: boolean
 }
 
+export interface PublishInput {
+  text: string
+  requestId: string
+}
+
+export interface PublishResult {
+  status: 'published'
+  postId: string
+  permalink?: string
+  timestamp?: string
+  message?: string
+}
+
+export type PublishRequestState =
+  | { state: 'claimed' }
+  | { state: 'processing' }
+  | { state: 'failed' }
+  | { state: 'published'; result: PublishResult }
+
 export class AppError extends Error {
   constructor(
     public readonly code: string,

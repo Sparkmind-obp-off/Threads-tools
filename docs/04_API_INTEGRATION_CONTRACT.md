@@ -20,21 +20,43 @@ The browser never receives the App Secret, access token, OAuth code, provider au
 
 Secrets must be supplied through `.dev.vars` locally or Cloudflare Pages secrets in production.
 
-## Current official Phase 2 contract
+## Current official Phase 2/3 contract
 
-Verified against Meta's official Threads documentation on 2026-09-11.
+Verified against Meta's official Threads documentation on 2026-09-11. Provider requests use the configurable version path `THREADS_API_VERSION`; the application default and the official publishing examples verified for this implementation use `v1.0`.
 
 ### OAuth permissions
 
-The authorization window requests the minimum Phase 2 read set:
+The authorization window requests the minimum Phase 3 publish plus existing read set:
 
 - `threads_basic` — required for all Threads API endpoints and owned account/post retrieval.
+- `threads_content_publish` — required for Threads publishing endpoints.
 - `threads_read_replies` — required for GET calls to reply endpoints.
 - `threads_manage_insights` — required for GET calls to insights endpoints.
 
-`threads_content_publish` and `threads_manage_replies` are intentionally not requested in Phase 2.
+`threads_manage_replies` is intentionally not requested because reply creation/moderation is outside Phase 3.
 
-Threads testers may grant these permissions while the app is in development. Users without an app role require App Review approval for each permission and a published app. Existing Phase 1 connections must reconnect to grant the additional Phase 2 permissions.
+Threads testers may grant these permissions while the app is in development. Users without an app role require App Review approval for each permission and a published app. Existing connections must reconnect to grant `threads_content_publish`.
+
+### Text publishing
+
+Phase 3 implements the official two-step text-only flow:
+
+1. `POST /v1.0/{threads-user-id}/threads` with form fields `media_type=TEXT` and required non-empty `text`.
+2. `POST /v1.0/{threads-user-id}/threads_publish` with form field `creation_id={container-id}`.
+3. Best-effort enrichment after a successful publish: `GET /v1.0/{threads-media-id}?fields=id,permalink,timestamp,text,media_type`.
+
+All three calls use the access token only in the server-to-provider `Authorization: Bearer` header. The browser receives only the normalized application result. The publish ID returned by `threads_publish` is authoritative; permalink and timestamp are shown only when the follow-up media lookup actually returns them.
+
+Current verified limits and behavior:
+
+- Text posts are limited to 500 characters, with emojis counted by UTF-8 bytes; the application therefore enforces a 500 UTF-8-byte limit on both client and server.
+- Threads rejects posts containing more than 5 unique links during container creation (effective December 22, 2025); the application validates this before provider calls.
+- Profiles are limited to 250 API-published posts in a rolling 24-hour period; `threads_publish` enforces the quota.
+- Containers expire after 24 hours if unpublished.
+- Container status values documented by Meta are `EXPIRED`, `ERROR`, `FINISHED`, `IN_PROGRESS`, and `PUBLISHED`. Text publishing uses the direct two-step flow; no automatic blind publish retry or background polling is performed.
+- Meta recommends allowing processing time before publishing media containers. Phase 3 intentionally excludes image, video, and carousel publishing, so it does not expose local-file or public-URL controls.
+
+The official API supports `TEXT`, `IMAGE`, `VIDEO`, and `CAROUSEL`; this application supports only `TEXT` in Phase 3. Images/videos must be hosted on a publicly accessible server and satisfy Meta media specifications. They are truthfully shown as not configured rather than represented by fake upload controls.
 
 ### Account
 
@@ -88,10 +110,18 @@ Provider failures are normalized to safe application errors:
 - `POSTS_READ_FAILED`
 - `REPLIES_READ_FAILED`
 - `INSIGHTS_READ_FAILED`
+- `VALIDATION_FAILED`
+- `CONTAINER_CREATION_FAILED`
+- `PUBLISH_FAILED`
+- `PUBLISH_RESULT_UNCERTAIN`
+- `RATE_LIMITED`
+- `PROVIDER_UNAVAILABLE`
+- `DUPLICATE_IN_PROGRESS`
+- `DUPLICATE_REQUEST`
 - `PROVIDER_RESPONSE_INVALID`
 - safe unexpected/provider-unavailable errors
 
-Provider code `190` or HTTP 401 maps to a re-authentication instruction. Permission errors map to an explicit `unsupported` capability state for replies/insights. Raw provider messages are never forwarded.
+Provider code `190` or HTTP 401 maps to a re-authentication instruction. Permission errors map to safe capability/reconnect guidance. HTTP 429 and documented rate-limit codes map to `RATE_LIMITED`. A transport or provider-availability failure after container creation maps to `PUBLISH_RESULT_UNCERTAIN`; the application does not automatically republish. Raw provider messages are never forwarded.
 
 ## Capability and dataset states
 
@@ -111,3 +141,7 @@ Missing metric values remain absent/undefined and are never converted to zero.
 - Retrieve User Posts: `https://developers.facebook.com/documentation/threads/retrieve-and-discover-posts/retrieve-posts`
 - Replies and Conversations: `https://developers.facebook.com/documentation/threads/retrieve-and-manage-replies/replies-and-conversations`
 - Threads Insights API: `https://developers.facebook.com/documentation/threads/insights`
+- Threads Posts (publishing, fields, limits, media specs): `https://developers.facebook.com/documentation/threads/posts`
+- Publish endpoint reference: `https://developers.facebook.com/documentation/threads/reference/publishing`
+- Threads API overview and publishing quota: `https://developers.facebook.com/documentation/threads/overview`
+- Container troubleshooting/status: `https://developers.facebook.com/documentation/threads/troubleshooting`

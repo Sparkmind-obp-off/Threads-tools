@@ -22,9 +22,13 @@ Implemented read-only account identity, owned post retrieval, cursor pagination,
 
 ## Phase 3 — Publish
 
-Future scope: compose validation, supported media handling, creation container, and publish flow.
+Implemented: authenticated Compose UI, current 500 UTF-8-byte text validation, five-link limit validation, preview, explicit publish action, connected-account identity, server-side text container creation, publish operation, safe result enrichment, D1-backed duplicate-request protection, and trustworthy loading/success/error/unsupported-media states.
 
-**Not implemented in Phase 2.**
+**Content scope:** text-only. The official API also supports image, video, and carousel posts, but those require publicly reachable provider-fetchable media plus processing behavior that is not configured in this console. No fake local upload control is exposed.
+
+**Gate:** automated implementation checks must pass and a real connected Threads account with `threads_content_publish` must create a real post. Until that real-world publish is verified, the product gate is `BLOCKED` rather than `PASS`.
+
+**External dependencies:** production Threads secrets and callback URI, Threads Tester access while the app is in development or Meta App Review plus a published app for non-role users, and a fresh OAuth grant containing `threads_content_publish`.
 
 ## Phase 4 — Operator polish
 

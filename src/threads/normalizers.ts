@@ -81,6 +81,12 @@ export function normalizeReply(payload: unknown): ThreadsReply {
   })
 }
 
+export function normalizePublishId(payload: unknown, entity = 'publish response'): string {
+  const item = record(payload)
+  if (!item) throw new AppError('PROVIDER_RESPONSE_INVALID', `Threads returned malformed ${entity} data.`, 502)
+  return requiredId(item.id, entity)
+}
+
 export function normalizePage<T>(payload: unknown, normalizer: (item: unknown) => T): { items: T[]; nextCursor?: string } {
   const body = record(payload)
   if (!body || !Array.isArray(body.data)) throw new AppError('PROVIDER_RESPONSE_INVALID', 'Threads returned malformed paginated data.', 502)

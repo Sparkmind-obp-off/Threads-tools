@@ -1,4 +1,4 @@
-import type { SafeConnection, ThreadsAccount } from '../domain/types'
+import type { PublishRequestState, PublishResult, SafeConnection, ThreadsAccount } from '../domain/types'
 import { decryptToken, encryptToken, sha256 } from '../auth/crypto'
 
 export interface OAuthStateStore {
@@ -27,6 +27,12 @@ export interface StoredCredential {
 
 export interface CredentialStore {
   getCredential(now?: Date): Promise<StoredCredential | null>
+}
+
+export interface PublishRequestStore {
+  claim(requestId: string, accountId: string, contentHash: string, now?: Date): Promise<PublishRequestState>
+  markPublished(requestId: string, result: PublishResult, now?: Date): Promise<void>
+  markFailed(requestId: string, now?: Date): Promise<void>
 }
 
 export class D1OAuthStateStore implements OAuthStateStore {
@@ -88,4 +94,42 @@ export class D1ConnectionStore implements ConnectionStore {
   }
 
   async disconnect(): Promise<void> { await this.db.prepare('DELETE FROM threads_connections WHERE id = 1').run() }
+}
+
+export class D1PublishRequestStore implements PublishRequestStore {
+  constructor(private readonly db: D1Database) {}
+
+  async claim(requestId: string, accountId: string, contentHash: string, now = new Date()): Promise<PublishRequestState> {
+    const timestamp = now.toISOString()
+    await this.db.prepare('DELETE FROM publish_requests WHERE updated_at < ?')
+      .bind(new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString()).run()
+    const inserted = await this.db.prepare(`INSERT OR IGNORE INTO publish_requests
+      (request_id, account_id, content_hash, status, created_at, updated_at) VALUES (?, ?, ?, 'processing', ?, ?)`)
+      .bind(requestId, accountId, contentHash, timestamp, timestamp).run()
+    if (inserted.meta.changes === 1) return { state: 'claimed' }
+
+    const row = await this.db.prepare(`SELECT account_id, content_hash, status, result_json
+      FROM publish_requests WHERE request_id = ?`).bind(requestId).first<Record<string, string | null>>()
+    if (!row || row.account_id !== accountId || row.content_hash !== contentHash) return { state: 'failed' }
+    if (row.status === 'processing') return { state: 'processing' }
+    if (row.status === 'published' && row.result_json) {
+      try {
+        const result = JSON.parse(row.result_json) as PublishResult
+        if (result.status === 'published' && typeof result.postId === 'string') return { state: 'published', result }
+      } catch { /* treat malformed persisted output as failed */ }
+    }
+    return { state: 'failed' }
+  }
+
+  async markPublished(requestId: string, result: PublishResult, now = new Date()): Promise<void> {
+    await this.db.prepare(`UPDATE publish_requests SET status = 'published', result_json = ?, updated_at = ?
+      WHERE request_id = ? AND status = 'processing'`)
+      .bind(JSON.stringify(result), now.toISOString(), requestId).run()
+  }
+
+  async markFailed(requestId: string, now = new Date()): Promise<void> {
+    await this.db.prepare(`UPDATE publish_requests SET status = 'failed', updated_at = ?
+      WHERE request_id = ? AND status = 'processing'`)
+      .bind(now.toISOString(), requestId).run()
+  }
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeInsights, normalizePage, normalizePost } from '../src/threads/normalizers'
+import { normalizeInsights, normalizePage, normalizePost, normalizePublishId } from '../src/threads/normalizers'
 
 describe('Threads provider normalizers', () => {
   it('maps supported post fields to the stable app model', () => {
@@ -24,6 +24,11 @@ describe('Threads provider normalizers', () => {
     const [metric] = normalizeInsights({ data: [{ name: 'views', period: 'day', values: [] }] })
     expect(metric).toEqual({ name: 'views', period: 'day' })
     expect(metric).not.toHaveProperty('total')
+  })
+
+  it('normalizes publish IDs without inventing optional fields', () => {
+    expect(normalizePublishId({ id: 123, permalink: 'ignored', access_token: 'must-not-leak' })).toBe('123')
+    expect(() => normalizePublishId({ status: 'ok' })).toThrowError(/malformed publish response/)
   })
 
   it('normalizes pagination cursors and rejects malformed provider payloads', () => {

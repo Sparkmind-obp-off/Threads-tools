@@ -45,11 +45,23 @@ npm run build
 - Invalid media IDs rejected before provider calls.
 - Expired authorization produces a reconnect state.
 
+### Phase 3 publishing
+
+- OAuth requests `threads_content_publish` alongside the existing read scopes.
+- Text container creation and publish requests use current required fields and server-side bearer authentication.
+- Publish IDs and optional post details are allow-listed and normalized.
+- Empty, oversized UTF-8, malformed request IDs, and more than five unique links are rejected before provider calls.
+- Not-connected and expired-authorization states are explicit.
+- Container failure, definite publish rejection, rate limiting, provider outage, malformed responses, and ambiguous publish results are normalized safely.
+- D1-backed request IDs prevent active duplicate submissions and replay a persisted success without another provider call.
+- Ambiguous publish results are not marked safe-to-retry and are never blindly republished.
+
 ### UI and client security
 
-- Dashboard, Posts, Engagement, Insights, and Settings shells render.
+- Dashboard, Posts, Compose, Engagement, Insights, and Settings shells render.
+- Compose includes byte count, client validation, preview, connected-account identity, publishing lock, success/error states, and an honest unsupported-media explanation.
 - Loading, empty, unsupported, error, and Load More states are present.
-- Server-only environment names, access tokens, and provider Authorization headers are not shipped in browser assets.
+- Server-only environment names, access tokens, refresh tokens, OAuth codes, and provider Authorization headers are not shipped in browser assets.
 
 ## Manual real-account verification
 
@@ -57,15 +69,18 @@ npm run build
 2. Add the exact callback URL in Meta App Dashboard.
 3. Ensure the account is a Threads Tester while the app is in development and accept the invitation.
 4. Sign in at `/settings` and reconnect the account.
-5. Confirm the authorization window requests `threads_basic`, `threads_read_replies`, and `threads_manage_insights` only.
-6. Open `/`, `/posts`, `/engagement`, and `/insights`.
-7. Verify owned posts match Threads and Load More works when another cursor is returned.
-8. Verify replies and insights render when permissions are granted; otherwise verify an honest Unsupported state.
-9. Inspect browser network responses and rendered HTML for absence of access tokens, authorization codes, App Secret, and provider authorization headers.
-10. Expire/revoke the token and verify a safe reconnect instruction appears.
+5. Confirm the authorization window requests `threads_basic`, `threads_content_publish`, `threads_read_replies`, and `threads_manage_insights` only.
+6. Open `/compose`; verify the connected account, byte count, validation, preview, and unsupported-media explanation.
+7. Publish one unique text post explicitly and confirm Threads returns a real post ID. Verify permalink/timestamp only appear when the provider returns them.
+8. Open `/posts` and confirm the newly published real post is readable through the Phase 2 layer.
+9. Open `/`, `/posts`, `/engagement`, and `/insights`; verify existing read behavior and pagination remain intact.
+10. Verify replies and insights render when permissions are granted; otherwise verify an honest Unsupported state.
+11. Inspect browser network responses, rendered HTML, and logs for absence of access tokens, refresh tokens, authorization codes, App Secret, and provider authorization headers.
+12. Attempt a double click while publishing and confirm only one publish request is active.
+13. Expire/revoke the token and verify a safe reconnect instruction appears.
 
 ## Phase gates
 
 Phase 1 remains dependent on a successful operator-owned real OAuth connection.
 
-Phase 2 implementation passes automated checks only after all tests and production build pass. The final product gate is `BLOCKED` until a real connected account verifies owned posts and any granted reply/insights capabilities in the deployed environment.
+Phase 3 implementation passes automated checks only after all tests, typecheck, D1 migration, and production build pass. The final Phase 3 product gate remains `BLOCKED` until a real connected account with `threads_content_publish` successfully creates and publishes a real post in the deployed environment. App secrets, callback configuration, tester role/App Review, and permission grants are external dependencies.

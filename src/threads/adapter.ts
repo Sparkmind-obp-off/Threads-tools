@@ -1,6 +1,6 @@
 import { AppError, type InsightMetric, type PageResult, type ThreadsAccount, type ThreadsPost, type ThreadsReply } from '../domain/types'
 import type { AppConfig } from '../config/env'
-import { normalizeAccount, normalizeInsights, normalizePage, normalizePost, normalizeReply } from './normalizers'
+import { normalizeAccount, normalizeInsights, normalizePage, normalizePost, normalizePublishId, normalizeReply } from './normalizers'
 
 export interface TokenResult { accessToken: string; userId: string; expiresIn?: number }
 export interface ThreadsProvider {
@@ -12,6 +12,9 @@ export interface ThreadsProvider {
   listReplies(accessToken: string, mediaId: string, cursor?: string, limit?: number): Promise<PageResult<ThreadsReply>>
   getPostInsights(accessToken: string, mediaId: string): Promise<InsightMetric[]>
   getAccountInsights(accessToken: string, userId: string): Promise<InsightMetric[]>
+  createTextContainer(accessToken: string, userId: string, text: string): Promise<string>
+  publishContainer(accessToken: string, userId: string, containerId: string): Promise<string>
+  getPost(accessToken: string, mediaId: string): Promise<ThreadsPost>
 }
 
 interface ProviderErrorPayload {
@@ -34,7 +37,7 @@ export class MetaThreadsProvider implements ThreadsProvider {
     const url = new URL('https://threads.com/oauth/authorize')
     url.searchParams.set('client_id', this.config.threadsAppId)
     url.searchParams.set('redirect_uri', this.config.threadsRedirectUri)
-    url.searchParams.set('scope', 'threads_basic,threads_read_replies,threads_manage_insights')
+    url.searchParams.set('scope', 'threads_basic,threads_content_publish,threads_read_replies,threads_manage_insights')
     url.searchParams.set('response_type', 'code')
     url.searchParams.set('state', state)
     return url.toString()
@@ -95,10 +98,35 @@ export class MetaThreadsProvider implements ThreadsProvider {
     return normalizeInsights(payload)
   }
 
+  async createTextContainer(accessToken: string, userId: string, text: string): Promise<string> {
+    const payload = await this.post(`${encodeURIComponent(userId)}/threads`, accessToken, { media_type: 'TEXT', text }, 'CONTAINER_CREATION_FAILED', 'Threads could not prepare this post.')
+    return normalizePublishId(payload, 'container')
+  }
+
+  async publishContainer(accessToken: string, userId: string, containerId: string): Promise<string> {
+    const payload = await this.post(`${encodeURIComponent(userId)}/threads_publish`, accessToken, { creation_id: containerId }, 'PUBLISH_FAILED', 'Threads could not publish this post.')
+    return normalizePublishId(payload)
+  }
+
+  async getPost(accessToken: string, mediaId: string): Promise<ThreadsPost> {
+    const payload = await this.get(encodeURIComponent(mediaId), accessToken, { fields: 'id,permalink,timestamp,text,media_type' }, 'PUBLISHED_POST_LOOKUP_FAILED', 'The published post details could not be loaded.')
+    return normalizePost(payload)
+  }
+
   private async get(path: string, accessToken: string, params: Record<string, string | undefined>, code: string, message: string): Promise<Record<string, unknown>> {
     const url = new URL(`${this.config.threadsApiBaseUrl}/${this.config.threadsApiVersion}/${path}`)
     for (const [key, value] of Object.entries(params)) if (value) url.searchParams.set(key, value)
     const response = await this.fetcher(url, { method: 'GET', headers: { Authorization: `Bearer ${accessToken}` } })
+    return this.readPayload(response, code, message)
+  }
+
+  private async post(path: string, accessToken: string, params: Record<string, string>, code: string, message: string): Promise<Record<string, unknown>> {
+    const body = new URLSearchParams(params)
+    const response = await this.fetcher(`${this.config.threadsApiBaseUrl}/${this.config.threadsApiVersion}/${path}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+      body,
+    })
     return this.readPayload(response, code, message)
   }
 
@@ -117,10 +145,16 @@ export class MetaThreadsProvider implements ThreadsProvider {
         throw new AppError('AUTHORIZATION_EXPIRED', 'Threads authorization is invalid or expired. Reconnect the account.', 401)
       }
       if (response.status === 403 || providerCode === 10 || providerCode === 200) {
-        throw new AppError('CAPABILITY_NOT_GRANTED', 'The connected account has not granted the required Threads permission. Reconnect and approve the requested read permission.', 403)
+        throw new AppError('CAPABILITY_NOT_GRANTED', 'The connected account has not granted the required Threads permission. Reconnect and approve the requested permission.', 403)
+      }
+      if (response.status === 429 || providerCode === 4 || providerCode === 17 || providerCode === 32 || providerCode === 613) {
+        throw new AppError('RATE_LIMITED', 'Threads publishing or API rate limits were reached. Wait before trying again.', 429, true)
       }
       const suffix = providerCode ? ` (provider code ${providerCode})` : ''
-      throw new AppError(code, `${message}${suffix}`, response.status >= 500 ? 503 : 502, response.status >= 500 || response.status === 429)
+      if (response.status >= 500 && (code === 'CONTAINER_CREATION_FAILED' || code === 'PUBLISH_FAILED')) {
+        throw new AppError('PROVIDER_UNAVAILABLE', `Threads is temporarily unavailable.${suffix}`, 503, true)
+      }
+      throw new AppError(code, `${message}${suffix}`, response.status >= 500 ? 503 : 502, response.status >= 500)
     }
     return payload
   }

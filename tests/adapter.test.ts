@@ -14,11 +14,11 @@ function response(payload: unknown, status = 200) {
 }
 
 describe('Meta Threads adapter', () => {
-  it('requests only Phase 2 read permissions', () => {
+  it('requests the Phase 3 publish permission with existing read permissions', () => {
     const url = new URL(new MetaThreadsProvider(config).authorizationUrl('state'))
     expect(url.origin + url.pathname).toBe('https://threads.com/oauth/authorize')
-    expect(url.searchParams.get('scope')).toBe('threads_basic,threads_read_replies,threads_manage_insights')
-    expect(url.searchParams.get('scope')).not.toContain('threads_content_publish')
+    expect(url.searchParams.get('scope')).toBe('threads_basic,threads_content_publish,threads_read_replies,threads_manage_insights')
+    expect(url.searchParams.get('scope')).toContain('threads_content_publish')
     expect(url.searchParams.get('state')).toBe('state')
   })
 
@@ -42,6 +42,48 @@ describe('Meta Threads adapter', () => {
     expect(url.searchParams.get('after')).toBe('CURSOR')
     expect(url.searchParams.get('access_token')).toBeNull()
     expect((init?.headers as Record<string, string>).Authorization).toBe('Bearer server-token')
+  })
+
+  it('creates and publishes a text container without putting the token in URLs', async () => {
+    const fetcher = vi.fn()
+      .mockResolvedValueOnce(response({ id: 'container-10' }))
+      .mockResolvedValueOnce(response({ id: 'post-11' }))
+      .mockResolvedValueOnce(response({ id: 'post-11', permalink: 'https://www.threads.net/@operator/post/abc', timestamp: '2026-09-11T10:00:00+0000' }))
+    const provider = new MetaThreadsProvider(config, fetcher as unknown as typeof fetch)
+    expect(await provider.createTextContainer('server-token', '42', 'Real text')).toBe('container-10')
+    expect(await provider.publishContainer('server-token', '42', 'container-10')).toBe('post-11')
+    expect(await provider.getPost('server-token', 'post-11')).toMatchObject({ id: 'post-11', permalink: 'https://www.threads.net/@operator/post/abc' })
+
+    const createUrl = new URL(String(fetcher.mock.calls[0][0]))
+    const createInit = fetcher.mock.calls[0][1]
+    expect(createUrl.pathname).toBe('/v1.0/42/threads')
+    expect(createUrl.searchParams.get('access_token')).toBeNull()
+    expect((createInit?.headers as Record<string, string>).Authorization).toBe('Bearer server-token')
+    expect(String(createInit?.body)).toContain('media_type=TEXT')
+    expect(String(createInit?.body)).toContain('text=Real+text')
+
+    const publishUrl = new URL(String(fetcher.mock.calls[1][0]))
+    expect(publishUrl.pathname).toBe('/v1.0/42/threads_publish')
+    expect(String(fetcher.mock.calls[1][1]?.body)).toBe('creation_id=container-10')
+  })
+
+  it('normalizes publish authorization, rate-limit, rejection, and provider availability failures', async () => {
+    const permission = vi.fn(async () => response({ error: { message: 'raw permission payload', code: 10 } }, 403))
+    await expect(new MetaThreadsProvider(config, permission as unknown as typeof fetch).createTextContainer('secret', '42', 'Text')).rejects.toMatchObject({ code: 'CAPABILITY_NOT_GRANTED' })
+
+    const limited = vi.fn(async () => response({ error: { message: 'raw quota payload', code: 613 } }, 429))
+    await expect(new MetaThreadsProvider(config, limited as unknown as typeof fetch).publishContainer('secret', '42', 'container')).rejects.toMatchObject({ code: 'RATE_LIMITED', retryable: true })
+
+    const rejected = vi.fn(async () => response({ error: { message: 'raw validation payload', code: 100 } }, 400))
+    await expect(new MetaThreadsProvider(config, rejected as unknown as typeof fetch).createTextContainer('secret', '42', 'Text')).rejects.toMatchObject({ code: 'CONTAINER_CREATION_FAILED' })
+
+    const unavailable = vi.fn(async () => response({ error: { message: 'raw outage payload', code: 2 } }, 503))
+    await expect(new MetaThreadsProvider(config, unavailable as unknown as typeof fetch).publishContainer('secret', '42', 'container')).rejects.toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true })
+  })
+
+  it('rejects malformed publish responses safely', async () => {
+    const fetcher = vi.fn(async () => response({ ok: true, access_token: 'must-not-leak' }))
+    await expect(new MetaThreadsProvider(config, fetcher as unknown as typeof fetch).createTextContainer('secret', '42', 'Text')).rejects.toMatchObject({ code: 'PROVIDER_RESPONSE_INVALID' })
   })
 
   it('reads supported top-level replies', async () => {
@@ -69,7 +111,7 @@ describe('Meta Threads adapter', () => {
   })
 
   it('maps other provider errors without returning raw provider messages', async () => {
-    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ error: { message: 'raw provider details', code: 4 } }, 500))
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => response({ error: { message: 'raw provider details', code: 2 } }, 500))
     await expect(new MetaThreadsProvider(config, fetcher as unknown as typeof fetch).getAccount('server-token')).rejects.toMatchObject({ code: 'ACCOUNT_LOOKUP_FAILED', retryable: true })
     await expect(new MetaThreadsProvider(config, fetcher as unknown as typeof fetch).getAccount('server-token')).rejects.not.toThrow('raw provider details')
   })
