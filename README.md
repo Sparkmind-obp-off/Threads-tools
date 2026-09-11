@@ -240,7 +240,7 @@ Automated tests cover provider success/errors, pagination, replies, period insig
 - **Platform:** Cloudflare Pages + Hono + D1 (BYOK)
 - **Production:** https://threads-tools.pages.dev
 - **Deployment status:** Phase 5.1 active on Cloudflare Pages (BYOK), deployed and route-verified 2026-09-11
-- **Verified deployment:** `https://e8ee8044.threads-tools.pages.dev` (Production branch `main`, source `f7b23f5`); canonical URL also verified
+- **Verified deployment:** Production branch `main`; canonical `https://threads-tools.pages.dev` and the latest immutable deployment URL were both route-verified
 - **Provider configuration status:** Not configured; `/setup` now provides exact actions, safe copy controls, the secure manual Cloudflare fallback, and fresh re-checks without exposing values
 - **Private access:** Not yet verified/configured; the URL returned HTTP 200 without an Access challenge during deployment verification. Configure Cloudflare Access for all page, API, and OAuth routes before treating it as private. The application intentionally has no in-app operator password.
 - **D1:** `threads-tools-production`; migrations `0001_phase1_connection.sql`, `0002_phase3_publish_requests.sql`, and `0003_phase4_audit_events.sql` are applied
