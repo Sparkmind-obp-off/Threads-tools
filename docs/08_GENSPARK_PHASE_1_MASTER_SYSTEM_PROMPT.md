@@ -57,6 +57,45 @@ Create a working web application with:
 
 Do not implement fake posts, fake insights, fake comments, or fake connected-account data.
 
+## Credential Configuration UX — Important Addition
+
+The application must provide a dedicated **Settings / Configuration** area so the operator understands exactly where Threads credentials belong.
+
+However, do **not** create a browser form that sends or persists the real `THREADS_APP_SECRET` as ordinary application data. A normal web UI/database is not an acceptable substitute for deployment secret storage.
+
+For Phase 1, implement a safe configuration experience:
+
+- Show configuration status for required server-side variables.
+- Show whether `THREADS_APP_ID`, `THREADS_APP_SECRET`, `THREADS_REDIRECT_URI`, and `THREADS_API_BASE_URL` are configured.
+- Mask secret values completely; never display the actual App Secret.
+- Provide clear instructions such as `Configure in deployment environment / local .env`, without asking the operator to paste the secret into GitHub or the browser.
+- Allow the operator to verify configuration without revealing secret values.
+- Provide `Connect Threads` from the same Settings/Connection area.
+- Show connected account status separately from application credential configuration.
+
+The conceptual UI may look like:
+
+`Settings`
+
+`Application Configuration`
+- Threads App ID: Configured / Missing
+- Threads App Secret: Configured / Missing
+- Redirect URI: Configured / Missing
+- API Base URL: Configured / Missing
+
+`Threads Account`
+- Connection status
+- Connected username/display name when available
+- `Connect Threads` / `Reconnect` / `Disconnect` as appropriate
+
+This is intentionally a **configuration-status space**, not a secret-entry form.
+
+### Future multi-user extension
+
+Design the configuration boundary so it can later support multiple operators/accounts without rewriting the whole system. If the product eventually becomes multi-user, credentials/tokens must use a proper encrypted secret/credential store with strict tenant isolation and access controls.
+
+Do not implement the multi-user system in Phase 1.
+
 ## API correctness rule
 
 Do not blindly copy endpoint names, fields, permissions, or token behavior from old tutorials or from the previous API tester repository.
@@ -162,6 +201,8 @@ Connection screen should clearly show:
 - understandable provider/API errors
 - no raw JSON dump as the primary user experience
 
+The Settings area should make the security model obvious: **credentials are configured server-side; the UI reports status but does not expose secrets.**
+
 Dashboard may be a shell for future phases, but it must clearly communicate that Phase 1 is the connection foundation.
 
 Use responsive layout and accessible controls.
@@ -211,6 +252,7 @@ Create clear boundaries such as:
 - server route handlers/controllers
 - normalized domain types
 - UI components/pages
+- `lib/config/` or equivalent server-only configuration validation
 
 Exact directory structure is flexible, but responsibilities must remain separated.
 
@@ -231,6 +273,12 @@ Add tests for at least:
 9. confirmation that secrets are not returned by public API responses
 10. production build/type checking
 
+Also test the configuration-status layer to confirm that:
+
+- missing secrets are reported only as `Missing`/not configured
+- configured secrets are reported only as `Configured`
+- actual secret values never appear in API responses or rendered HTML
+
 Where a real provider integration cannot run in CI, use mocked provider responses for unit tests and document the real-account manual verification step.
 
 ## Acceptance criteria
@@ -241,6 +289,7 @@ Phase 1 passes only if all of the following are true:
 - Production build succeeds.
 - Required environment variables are documented.
 - Missing configuration is shown as a clear configuration state.
+- Configuration status never reveals secret values.
 - `Connect Threads` starts OAuth.
 - OAuth callback validates state.
 - Successful authorization is exchanged server-side.
@@ -268,18 +317,19 @@ Work in this order:
 2. Determine the smallest suitable application stack compatible with the deployment direction.
 3. Create the application skeleton.
 4. Create environment/config contract.
-5. Implement Threads provider adapter.
-6. Implement OAuth initiation.
-7. Implement callback and state validation.
-8. Implement secure connection/session handling.
-9. Implement account-status endpoint/model.
-10. Implement Connection/Settings UI.
-11. Add error/loading/success states.
-12. Add tests.
-13. Run typecheck/build/tests.
-14. Fix all implementation errors.
-15. Update README/docs with exact local setup and Phase 1 verification instructions.
-16. Produce a concise implementation summary.
+5. Implement server-only configuration validation and safe configuration-status response.
+6. Implement Threads provider adapter.
+7. Implement OAuth initiation.
+8. Implement callback and state validation.
+9. Implement secure connection/session handling.
+10. Implement account-status endpoint/model.
+11. Implement Connection/Settings UI with configuration-status cards.
+12. Add error/loading/success states.
+13. Add tests.
+14. Run typecheck/build/tests.
+15. Fix all implementation errors.
+16. Update README/docs with exact local setup and Phase 1 verification instructions.
+17. Produce a concise implementation summary.
 
 ## Git discipline
 
@@ -311,6 +361,6 @@ Build the application, not a tester.
 
 The success metric is:
 
-> **The operator can open the app, connect the real Threads account securely, and see a trustworthy connected-account state.**
+> **The operator can open the app, see safe configuration status, connect the real Threads account securely, and see a trustworthy connected-account state.**
 
 Everything else is secondary until that works.
