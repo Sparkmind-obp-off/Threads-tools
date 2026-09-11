@@ -145,21 +145,26 @@ Verified against Cloudflare's official documentation on 2026-09-11:
 - Required API permission: account-level **Pages Write**.
 - Cloudflare supports OAuth 2.0 Authorization Code clients, including private clients for members of the parent account.
 
-`src/cloudflare/pages.ts` models and tests this contract, but it is not connected to a public route. A secure automated bridge additionally requires a provisioned Cloudflare OAuth client, deployment-level owner authorization, and a secure server-side authorization lifecycle. Those prerequisites are absent, so Phase 5.1 uses the explicit manual fallback rather than accepting raw API tokens or persisting a Cloudflare credential in D1.
+`src/cloudflare/oauth.ts` implements Cloudflare's official private self-managed OAuth Authorization Code bridge using `https://dash.cloudflare.com/oauth2/auth` and `https://dash.cloudflare.com/oauth2/token`. `src/cloudflare/pages.ts` discovers authorized accounts/projects, enforces the account/project boundary, reads Production configuration, preserves unrelated bindings, PATCHes only Production, and re-reads for safe presence/type verification. OAuth credentials are encrypted before D1 persistence and never enter browser state or responses. The client secret is an external owner bootstrap secret that Genspark never receives. Manual Variables/Secrets configuration remains available when that bootstrap is absent.
 
 Official Cloudflare references:
 
 - Pages project update: `https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/edit/`
 - Pages bindings / Variables and Secrets: `https://developers.cloudflare.com/pages/functions/bindings/`
 - API token permissions: `https://developers.cloudflare.com/fundamentals/api/reference/permissions/`
-- OAuth overview and client creation: `https://developers.cloudflare.com/fundamentals/oauth/` and `https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/`
+- OAuth overview, client creation, and endpoints: `https://developers.cloudflare.com/fundamentals/oauth/`, `https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/`, and `https://developers.cloudflare.com/fundamentals/oauth/integrate-with-cloudflare/`
 
 ## Phase 5 application endpoints
 
-- `GET /api/configuration` returns only allow-listed `configured` / `missing` readiness states, safe setup metadata, and a deployment-derived Redirect URI suggestion; no environment value is returned and the response is `no-store`.
-- `* /api/configuration/apply` always returns `403 OWNER_AUTHORIZATION_REQUIRED`; no unauthenticated configuration-write endpoint exists.
-- `GET /api/connection/status` returns only normalized account/connection metadata and never credentials.
-- The removed `/api/session` password endpoint is not replaced by another application password. Private URL access belongs at the deployment layer.
+- `GET /api/configuration` returns only allow-listed runtime readiness and safe bootstrap metadata; no environment value is returned and the response is `no-store`.
+- `GET /auth/cloudflare/start` and `GET /auth/cloudflare/callback` require a valid signed owner Cloudflare Access assertion; state is random, hashed, expiring, and single-use, and code exchange is server-side.
+- `GET /api/cloudflare/status` and `GET /api/cloudflare/resources` return safe connection/account/project metadata only.
+- `POST /api/cloudflare/project` verifies both the Access owner and the selected project under the authorized account before persisting non-secret identifiers.
+- `GET /api/configuration/production` re-reads the selected Pages project and returns value-free presence/type status.
+- `POST /api/configuration/apply` requires signed owner authorization and same-origin POST, accepts only validated Threads App ID/App Secret input, performs the idempotent Production merge/PATCH/re-read, and never returns secrets.
+- `POST /api/cloudflare/disconnect` deletes encrypted Cloudflare OAuth credentials.
+- `GET /api/connection/status` returns only normalized Threads account/connection metadata and never credentials.
+- The removed `/api/session` password endpoint is not replaced by another application password. Cloudflare Access is the cryptographically verified owner boundary.
 
 ## Phase 4 application endpoints
 

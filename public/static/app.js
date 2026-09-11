@@ -182,7 +182,7 @@ async function copySafeValue(value, button) {
   }
 }
 
-async function loadSetup() {
+async function legacyLoadSetup() {
   const configBadge = $('#setup-config-badge')
   const readiness = $('#setup-readiness')
   const bridgeBadge = $('#setup-bridge-badge')
@@ -248,6 +248,156 @@ async function loadSetup() {
     : `<div class="setup-success"><h3>${identity} is connected</h3><p>Personal setup is ready. Continue into the existing operator dashboard.</p><div class="actions"><button id="continue-dashboard" class="button primary" type="button">Continue to Dashboard</button><a class="button secondary" href="/auth/threads/start">Reconnect Threads</a></div></div>`
   $('#continue-dashboard')?.addEventListener('click', completeSetup)
   showResultNotice(connectionNode)
+}
+
+function bridgeErrorMessage(code) {
+  return ({
+    OWNER_AUTHORIZATION_REQUIRED: 'Cloudflare Access did not confirm the configured owner.',
+    OWNER_AUTHORIZATION_NOT_CONFIGURED: 'Configure the signed Cloudflare Access owner boundary first.',
+    CLOUDFLARE_OAUTH_NOT_CONFIGURED: 'Create the private Cloudflare OAuth client and add its server-side bindings.',
+    CLOUDFLARE_STATE_INVALID: 'The Cloudflare authorization request expired or was already used. Start again.',
+    CLOUDFLARE_CODE_INVALID: 'Cloudflare did not return a usable authorization code.',
+    CLOUDFLARE_TOKEN_EXCHANGE_FAILED: 'Cloudflare authorization succeeded, but secure token exchange failed.',
+    CLOUDFLARE_AUTHORIZATION_EXPIRED: 'Cloudflare authorization expired. Connect Cloudflare again.',
+  })[code] || 'The Cloudflare connection could not be completed safely.'
+}
+
+function renderProjectOptions(resources, selectedAccount, selectedProject) {
+  const options = resources.accounts.flatMap((account) => account.projects.map((project) => ({ account, project })))
+  const select = $('#project-select')
+  select.innerHTML = options.map(({ account, project }) => {
+    const value = `${account.id}:${project.name}`
+    const selected = account.id === selectedAccount && project.name === selectedProject ? ' selected' : ''
+    return `<option value="${escapeHtml(value)}"${selected}>${escapeHtml(account.name)} — ${escapeHtml(project.name)}</option>`
+  }).join('')
+  return options
+}
+
+async function loadCloudflareConnection(configuration) {
+  const badge = $('#setup-bridge-badge')
+  const node = $('#setup-bridge')
+  const projectSection = $('#project-section')
+  const automaticSection = $('#automatic-configuration')
+  if (!configuration.bridge.automatedWritesAvailable) {
+    badge.className = 'badge warning'; badge.textContent = 'Bootstrap required'
+    node.innerHTML = `<div class="bridge-state"><h3>Cloudflare OAuth client: Not configured</h3><p>${escapeHtml(configuration.bridge.reason)}</p><p>Create a private client with Authorization Code, <code>client_secret_basic</code>, the exact callback below, and the minimum Pages read/write capabilities.</p></div>`
+    projectSection.classList.add('hidden'); automaticSection.classList.add('hidden')
+    return undefined
+  }
+  try {
+    const status = await request('/api/cloudflare/status')
+    if (status.status === 'not_connected' || status.status === 'expired') {
+      badge.className = `badge ${status.status === 'expired' ? 'warning' : 'neutral'}`
+      badge.textContent = status.status === 'expired' ? 'Expired' : 'Not connected'
+      node.innerHTML = `<div class="empty-state"><h3>${status.status === 'expired' ? 'Reconnect Cloudflare' : 'Connect Cloudflare'}</h3><p>Authorize this private owner tool using Cloudflare’s official consent flow.</p><a class="button primary" href="/auth/cloudflare/start">${status.status === 'expired' ? 'Reconnect Cloudflare' : 'Connect Cloudflare'}</a></div>`
+      projectSection.classList.add('hidden'); automaticSection.classList.add('hidden')
+      return status
+    }
+    badge.className = 'badge supported'; badge.textContent = 'Connected'
+    node.innerHTML = `<div class="connected-strip"><span class="badge supported">Connected</span><div><strong>${escapeHtml(status.accountName || 'Authorized Cloudflare principal')}</strong><p>${status.projectName ? `Pages project: ${escapeHtml(status.projectName)}` : 'Choose an authorized Pages project below.'}</p></div><a class="button secondary" href="/auth/cloudflare/start">Reconnect</a></div>`
+    const resources = await request('/api/cloudflare/resources')
+    const options = renderProjectOptions(resources, status.accountId, status.projectName)
+    projectSection.classList.remove('hidden')
+    if (status.projectName) automaticSection.classList.remove('hidden')
+    else automaticSection.classList.add('hidden')
+    if (!options.length) node.insertAdjacentHTML('beforeend', capabilityState('No Pages projects available', 'The authorization returned no Pages project visible with the granted scopes.', 'empty'))
+    return status
+  } catch (error) {
+    badge.className = 'badge danger'; badge.textContent = 'Owner check required'
+    node.innerHTML = capabilityState('Cloudflare connection unavailable', error.message, 'error')
+    projectSection.classList.add('hidden'); automaticSection.classList.add('hidden')
+    return undefined
+  }
+}
+
+async function loadSetup() {
+  const configBadge = $('#setup-config-badge')
+  const readiness = $('#setup-readiness')
+  const connectionBadge = $('#setup-connection-badge')
+  const connectionNode = $('#setup-connection')
+  const recheck = $('#recheck-configuration')
+  recheck.disabled = true; recheck.textContent = 'Checking…'
+  try {
+    const configuration = await request('/api/configuration')
+    const runtimeReady = configuration.status === 'supported'
+    configBadge.className = `badge ${runtimeReady ? 'supported' : 'warning'}`
+    configBadge.textContent = runtimeReady ? 'Runtime ready' : 'Action needed'
+    readiness.innerHTML = [
+      ['Threads App ID', configuration.readiness.threadsAppId, 'Apply as a Production Variable.'],
+      ['Threads App Secret', configuration.readiness.threadsAppSecret, 'Apply as an encrypted Production Secret.'],
+      ['Redirect URI', configuration.readiness.redirectUri, 'Apply the exact deployment callback URI.'],
+      ['API Base URL', configuration.readiness.apiBaseUrl, 'Secure official default is active.'],
+      ['Session/token encryption secret', configuration.readiness.sessionSecret, 'Bootstrap as a 32+ character encrypted Production Secret.'],
+    ].map(([label, status, action]) => readinessRow(label, status, action)).join('')
+    $('#cloudflare-callback-url').textContent = configuration.bridge.callbackUrl
+    $('#redirect-uri-suggestion').textContent = configuration.actions.redirectUriSuggestion
+    $('#copy-redirect-uri').dataset.copyValue = configuration.actions.redirectUriSuggestion
+    $('#open-oauth-clients').href = safeUrl(configuration.actions.oauthClientsDashboardUrl) || 'https://dash.cloudflare.com/'
+    $('#open-cloudflare').href = safeUrl(configuration.actions.cloudflareDashboardUrl) || 'https://dash.cloudflare.com/'
+    $('#manual-bootstrap').innerHTML = `<p>${escapeHtml(configuration.bridge.reason)}</p><ul><li>Private OAuth client</li><li>Grant: <code>${escapeHtml(configuration.bridge.grantType)}</code></li><li>Token authentication: <code>${escapeHtml(configuration.bridge.tokenAuthenticationMethod)}</code></li><li>${escapeHtml(configuration.bridge.minimumScopeGuidance)}</li><li>Server bindings: ${configuration.bridge.requiredServerBindings.map((name) => `<code>${escapeHtml(name)}</code>`).join(', ')}</li></ul>`
+    await loadCloudflareConnection(configuration)
+
+    const connection = await request('/api/connection/status')
+    if (connection.status === 'connected') {
+      connectionBadge.className = 'badge supported'; connectionBadge.textContent = 'Connected'
+      connectionNode.innerHTML = `<div class="setup-success"><h3>${escapeHtml(connection.username ? '@' + connection.username : connection.displayName || 'Threads account')} is connected</h3><div class="actions"><button id="continue-dashboard" class="button primary" type="button">Continue to Dashboard</button><a class="button secondary" href="/auth/threads/start">Reconnect Threads</a></div></div>`
+      $('#continue-dashboard')?.addEventListener('click', completeSetup)
+    } else {
+      connectionBadge.className = 'badge neutral'; connectionBadge.textContent = 'Disconnected'
+      connectionNode.innerHTML = runtimeReady
+        ? '<div class="empty-state"><h3>Connect the owner’s Threads account</h3><p>Production runtime configuration is ready.</p><a class="button primary" href="/auth/threads/start">Connect Threads</a></div>'
+        : '<div class="empty-state"><h3>Production runtime is not ready</h3><p>Apply configuration, redeploy Pages, then re-check before connecting Threads.</p></div>'
+    }
+    const params = new URLSearchParams(location.search)
+    if (params.get('cloudflare')) {
+      const notice = document.createElement('div')
+      notice.className = `alert ${params.get('cloudflare') === 'connected' ? 'success' : 'error'}`
+      notice.textContent = params.get('cloudflare') === 'connected' ? 'Cloudflare connected. Confirm the intended account and Pages project.' : bridgeErrorMessage(params.get('code'))
+      workspace.prepend(notice); history.replaceState({}, '', location.pathname)
+    } else showResultNotice(connectionNode)
+  } catch (error) {
+    configBadge.className = 'badge danger'; configBadge.textContent = 'Error'
+    readiness.innerHTML = recoveryState(error)
+  } finally {
+    recheck.disabled = false; recheck.textContent = 'Re-check Configuration'
+  }
+}
+
+async function selectCloudflareProject(event) {
+  event.preventDefault()
+  const [accountId, ...projectParts] = $('#project-select').value.split(':')
+  const projectName = projectParts.join(':')
+  const button = event.currentTarget.querySelector('button[type="submit"]')
+  button.disabled = true; button.textContent = 'Confirming…'
+  try {
+    await request('/api/cloudflare/project', { method: 'POST', headers: { Origin: location.origin }, body: JSON.stringify({ accountId, projectName }) })
+    await loadSetup()
+  } catch (error) { alert(error.message) }
+  finally { button.disabled = false; button.textContent = 'Confirm project' }
+}
+
+async function applyProductionConfiguration(event) {
+  event.preventDefault()
+  const form = event.currentTarget
+  const button = form.querySelector('button[type="submit"]')
+  const result = $('#configuration-result')
+  button.disabled = true; button.textContent = 'Applying…'; result.textContent = ''
+  try {
+    const payload = { THREADS_APP_ID: $('#threads-app-id').value, THREADS_APP_SECRET: $('#threads-app-secret').value }
+    const status = await request('/api/configuration/apply', { method: 'POST', headers: { Origin: location.origin }, body: JSON.stringify(payload) })
+    $('#threads-app-secret').value = ''
+    result.innerHTML = `<div class="alert success"><strong>Production configuration verified</strong><p>${escapeHtml(status.message)}</p></div>`
+    await loadSetup()
+  } catch (error) {
+    $('#threads-app-secret').value = ''
+    result.innerHTML = `<div class="alert error"><strong>Configuration was not applied</strong><p>${escapeHtml(error.message)}</p></div>`
+  } finally { button.disabled = false; button.textContent = 'Apply Production' }
+}
+
+async function disconnectCloudflare() {
+  if (!confirm('Disconnect Cloudflare and delete the encrypted OAuth credential?')) return
+  try { await request('/api/cloudflare/disconnect', { method: 'POST', headers: { Origin: location.origin } }); await loadSetup() }
+  catch (error) { alert(error.message) }
 }
 
 async function loadDashboard() {
@@ -570,6 +720,9 @@ $('#insight-period')?.addEventListener('change', loadInsightComparison)
 $('#load-more-replies')?.addEventListener('click', () => { $('#load-more-replies').textContent = 'Loading…'; loadReplies(selectedPostId, true) })
 $('#load-more-audit')?.addEventListener('click', () => { $('#load-more-audit').textContent = 'Loading…'; loadAudit(true) })
 $('#recheck-configuration')?.addEventListener('click', loadSetup)
+$('#project-form')?.addEventListener('submit', selectCloudflareProject)
+$('#configuration-form')?.addEventListener('submit', applyProductionConfiguration)
+$('#disconnect-cloudflare')?.addEventListener('click', disconnectCloudflare)
 document.querySelectorAll('[data-copy-value]').forEach((button) => button.addEventListener('click', () => copySafeValue(button.dataset.copyValue, button)))
 async function init() {
   try { showConfiguration(await request('/api/configuration')) } catch { /* safe readiness is best effort */ }

@@ -74,12 +74,22 @@ npm run build
 - Connected, disconnected, and expired/reconnect states are covered.
 - OAuth state validation, encrypted token persistence, provider-side calls, and Phase 1–4 regression coverage remain intact.
 
+### Phase 5.1 Cloudflare Production bridge
+
+- Official Cloudflare authorization and token endpoint generation, exact configured scopes, and server-side `client_secret_basic` exchange.
+- Strong expiring single-use OAuth state and rejection of missing/invalid/replayed state or code.
+- Access JWT signature, issuer, audience, expiry, and exact owner-email validation; unauthenticated writes are rejected.
+- Account and Pages project discovery plus server-side account/project ownership enforcement.
+- `plain_text` / `secret_text` classification, explicit Production targeting, preservation of unrelated variables, idempotent updates, and post-write re-read.
+- Secret values and OAuth credentials are absent from UI, normalized responses, logs, and audit records.
+- Bootstrap fallback, Cloudflare API failure normalization, expired authorization, and fresh configuration re-checks.
+
 ### UI and client security
 
 - Dashboard, Posts, Compose, Engagement, Insights, and Settings shells render.
 - Compose includes byte count, client validation, preview, connected-account identity, publishing lock, success/error states, and an honest unsupported-media explanation.
 - Loading, empty, unsupported, error, and Load More states are present.
-- Server-only environment names, access tokens, refresh tokens, OAuth codes, and provider Authorization headers are not shipped in browser assets.
+- No server-only credential values, access/refresh tokens, OAuth codes, encrypted credential fields, or provider Authorization headers are shipped in browser assets. The setup form necessarily names the two owner-supplied Threads fields, but never contains persisted values.
 
 ## Manual real-account verification
 
@@ -102,6 +112,6 @@ npm run build
 
 ## Phase gates
 
-Phase 1 remains dependent on a successful operator-owned real OAuth connection.
+Phase 1 remains dependent on a successful operator-owned real Threads OAuth connection.
 
-Phase 5 implementation passes automated checks only after all tests, typecheck, and production build pass. The final product gate remains `BLOCKED` until deployment-level private access is confirmed and a real connected account verifies onboarding, read, insights, engagement, and preserved publishing in the deployed environment. App secrets, callback configuration, tester role/App Review, permission grants, and provider access are external dependencies.
+Phase 5.1 automated implementation passes only after the full suite, typecheck, build, route smoke tests, and credential scans pass. The final gate remains `BLOCKED` until the owner creates the private Cloudflare OAuth client, installs its client secret and exact scope IDs outside Genspark, configures Cloudflare Access plus the owner bindings, completes real Cloudflare consent/project discovery/Production apply/redeploy, and verifies the real Threads account flow. Unit tests never substitute for this production verification.

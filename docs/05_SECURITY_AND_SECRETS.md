@@ -12,8 +12,10 @@
 - Validate redirect URIs and callback state.
 - Sanitize provider errors before displaying them.
 - Keep `.env` files out of Git.
-- The Phase 5.1 UI never accepts a raw Cloudflare API token or persists Cloudflare authorization in browser storage, D1, logs, or audit events.
-- `/api/configuration/apply` is a deny-only route until a dedicated Cloudflare OAuth client, deployment-level owner authorization, and secure server-side authorization lifecycle are provisioned.
+- The Phase 5.1 UI never accepts a raw Cloudflare API token or persists Cloudflare authorization in browser storage, logs, audit events, or plaintext storage.
+- Every Cloudflare connection, discovery, selection, and Production-write route verifies the signed Cloudflare Access JWT issuer, audience, expiry, signature, and exact `OWNER_EMAIL`.
+- OAuth access/refresh credentials are AES-GCM encrypted with `SESSION_SECRET` before D1 persistence; authorization state is stored only as a single-use SHA-256 hash.
+- Configuration POST routes additionally require an exact same-origin `Origin` header. Secret values are accepted only by the owner-authorized endpoint, never returned, and cleared from browser input after submission.
 
 ## Repository controls
 
@@ -21,14 +23,14 @@ Required files/configuration should include `.env.example` with placeholders onl
 
 ## Production Configuration Center
 
-`/setup` provides safe status, exact binding names and types, the deployment-derived callback URI, an explicit Cloudflare checklist, and a fresh re-check action. It never displays environment values.
+`/setup` is the actionable Production Configuration Center: owner bootstrap, real Cloudflare OAuth consent, authorized account/project discovery and confirmation, secure Threads App ID/App Secret input, Production apply, safe re-check, redeploy guidance, and the existing Threads connection. It never displays saved environment or credential values.
 
 Production classification:
 
 - `THREADS_APP_ID`, `THREADS_REDIRECT_URI`, `THREADS_API_BASE_URL`, and `THREADS_API_VERSION`: `plain_text` variables.
 - `THREADS_APP_SECRET` and `SESSION_SECRET`: encrypted `secret_text` secrets.
 
-Cloudflare's official API supports `PATCH /accounts/{account_id}/pages/projects/{project_name}` with `deployment_configs.production.env_vars`, and Cloudflare now documents an OAuth Authorization Code flow with Pages Write permission. This deployment uses the secure manual fallback because no dedicated OAuth client or suitable secure server-side credential store has been provisioned. It does not invent an authorization flow or store a powerful Cloudflare credential in D1.
+Cloudflare's official API supports `PATCH /accounts/{account_id}/pages/projects/{project_name}` with `deployment_configs.production.env_vars`. The bridge uses Cloudflare's private self-managed OAuth Authorization Code flow at the documented `dash.cloudflare.com/oauth2/auth` and `/oauth2/token` endpoints with `client_secret_basic`. The owner must create the private client and install `CLOUDFLARE_OAUTH_CLIENT_SECRET` directly as a Production secret; Genspark never receives it. Pages settings are read before the PATCH, unrelated Production variables are preserved, Preview is untouched, and the project is re-read after the update. Manual Cloudflare Variables/Secrets configuration remains the fallback.
 
 ## Privacy
 

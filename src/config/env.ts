@@ -8,6 +8,12 @@ export interface Env {
   THREADS_API_BASE_URL?: string
   THREADS_API_VERSION?: string
   SESSION_SECRET?: string
+  CLOUDFLARE_OAUTH_CLIENT_ID?: string
+  CLOUDFLARE_OAUTH_CLIENT_SECRET?: string
+  CLOUDFLARE_OAUTH_SCOPES?: string
+  CF_ACCESS_TEAM_DOMAIN?: string
+  CF_ACCESS_AUD?: string
+  OWNER_EMAIL?: string
 }
 
 export interface AppConfig {

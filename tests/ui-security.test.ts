@@ -31,7 +31,7 @@ function environmentMissing() {
 
 describe('Phase 5 UI and browser security boundary', () => {
   it.each([
-    ['/setup', 'Personal Operator Setup'], ['/', 'Recent posts'], ['/posts', 'Your Threads posts'], ['/posts/10', 'Post insights'], ['/engagement', 'Top-level replies'],
+    ['/setup', 'Production Configuration Center'], ['/', 'Recent posts'], ['/posts', 'Your Threads posts'], ['/posts/10', 'Post insights'], ['/engagement', 'Top-level replies'],
     ['/compose', 'Create a Thread'], ['/insights', 'Account metric comparison'], ['/activity', 'Recent activity'], ['/settings', 'Connection status'],
   ])('renders the directly accessible real-data workspace shell for %s', async (path, label) => {
     const response = await app.request(path)
@@ -39,7 +39,7 @@ describe('Phase 5 UI and browser security boundary', () => {
     expect(response.status).toBe(200)
     expect(html).toContain(label)
     expect(html).not.toContain('Operator sign in')
-    expect(html).not.toContain('type="password"')
+    if (path !== '/setup') expect(html).not.toContain('type="password"')
     expect(html).not.toContain('server-secret')
     expect(html).not.toContain('access_token')
   })
@@ -97,7 +97,7 @@ describe('Phase 5 UI and browser security boundary', () => {
     ])
     const html = await setup.text()
     expect(html).toContain('Configuration readiness')
-    expect(html).toContain('Server secrets are checked only as safe readiness states')
+    expect(html).toContain('Cloudflare and Threads credentials stay server-side')
     expect(script).toContain("localStorage.getItem(ONBOARDING_KEY) === 'true'")
     expect(script).toContain("localStorage.setItem(ONBOARDING_KEY, 'true')")
     expect(script).toContain('Continue to Dashboard')
@@ -159,11 +159,12 @@ describe('Phase 5 UI and browser security boundary', () => {
       readFile(new URL('../public/static/style.css', import.meta.url), 'utf8'),
     ])
     const assets = script + css
-    expect(assets).not.toContain('THREADS_APP_SECRET')
-    expect(assets).not.toContain('SESSION_SECRET')
+    expect(assets).not.toContain('server-secret-value')
+    expect(assets).not.toContain('private-client-secret')
+    expect(assets).not.toContain('SESSION_SECRET=')
     expect(assets).not.toContain('Bearer server-token')
     expect(assets).not.toContain('Authorization:')
-    expect(assets).not.toContain('THREADS_APP_ID')
+    expect(assets).not.toContain('public-app-id')
     expect(assets).not.toContain('access_token')
     expect(assets).not.toContain('refresh_token')
     expect(assets).not.toContain('oauth code')

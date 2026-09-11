@@ -1,7 +1,10 @@
 import { Hono, type Context } from 'hono'
 import { getConfig, missingConfiguration, type Env } from './config/env'
-import { productionConfigurationStatus } from './config/production'
+import { cloudflareOAuthConfigured, ownerBoundaryConfigured, productionConfigurationStatus } from './config/production'
 import { AppError } from './domain/types'
+import { assertSameOrigin, requireOwner } from './auth/owner'
+import { CloudflareOAuthClient, CloudflareOAuthService, D1CloudflareOAuthStore } from './cloudflare/oauth'
+import { CloudflarePagesApi, CloudflarePagesApiError, type ProductionConfigurationInput } from './cloudflare/pages'
 import { MetaThreadsProvider } from './threads/adapter'
 import { D1AuditStore, D1ConnectionStore, D1OAuthStateStore, D1PublishRequestStore } from './storage/repositories'
 import { OAuthService } from './services/oauth'
@@ -20,6 +23,11 @@ app.use('*', async (c, next) => {
 
 function safeError(error: unknown): AppError {
   if (error instanceof AppError) return error
+  if (error instanceof CloudflarePagesApiError) {
+    if (error.code === 'AUTHORIZATION_INVALID') return new AppError('CLOUDFLARE_AUTHORIZATION_EXPIRED', error.message, 401)
+    if (error.code === 'PROJECT_BOUNDARY_VIOLATION') return new AppError('PROJECT_BOUNDARY_VIOLATION', error.message, 403)
+    return new AppError('CLOUDFLARE_API_FAILURE', error.message, 502, true)
+  }
   console.error('Safe diagnostic:', { category: 'unexpected_error', name: error instanceof Error ? error.name : 'unknown' })
   return new AppError('INTERNAL_ERROR', 'An unexpected error occurred. Please try again.', 500, true)
 }
@@ -45,6 +53,52 @@ function limit(c: Context): number | undefined {
   return value ? Number(value) : undefined
 }
 
+async function requireSetupOwner(c: Context<{ Bindings: Env }>): Promise<void> {
+  await requireOwner(c.req.header('Cf-Access-Jwt-Assertion'), {
+    teamDomain: c.env.CF_ACCESS_TEAM_DOMAIN,
+    audience: c.env.CF_ACCESS_AUD,
+    ownerEmail: c.env.OWNER_EMAIL,
+  })
+}
+
+function cloudflareStore(env: Env): D1CloudflareOAuthStore {
+  if (!env.SESSION_SECRET?.trim() || env.SESSION_SECRET.length < 32) throw new AppError('CONFIGURATION_MISSING', 'A valid session/token encryption secret is required.', 503)
+  return new D1CloudflareOAuthStore(env.DB, env.SESSION_SECRET)
+}
+
+function cloudflareOAuth(env: Env, requestUrl: string): CloudflareOAuthService {
+  if (!cloudflareOAuthConfigured(env)) throw new AppError('CLOUDFLARE_OAUTH_NOT_CONFIGURED', 'Create and configure the private Cloudflare OAuth client first.', 503)
+  const scopes = env.CLOUDFLARE_OAUTH_SCOPES!.trim().split(/\s+/).filter(Boolean)
+  return new CloudflareOAuthService(new CloudflareOAuthClient({
+    clientId: env.CLOUDFLARE_OAUTH_CLIENT_ID!.trim(),
+    clientSecret: env.CLOUDFLARE_OAUTH_CLIENT_SECRET!,
+    redirectUri: `${new URL(requestUrl).origin}/auth/cloudflare/callback`,
+    scopes,
+  }), cloudflareStore(env))
+}
+
+async function cloudflareApi(env: Env): Promise<{ api: CloudflarePagesApi; credential: Awaited<ReturnType<D1CloudflareOAuthStore['getCredential']>> }> {
+  const credential = await cloudflareStore(env).getCredential()
+  if (!credential) throw new AppError('CLOUDFLARE_NOT_CONNECTED', 'Connect Cloudflare before continuing.', 409)
+  if (credential.expiresAt && credential.expiresAt.getTime() <= Date.now()) throw new AppError('CLOUDFLARE_AUTHORIZATION_EXPIRED', 'Cloudflare authorization expired. Reconnect Cloudflare.', 401)
+  return { api: new CloudflarePagesApi(credential.accessToken), credential }
+}
+
+function parseConfigurationInput(value: unknown, requestUrl: string): ProductionConfigurationInput {
+  const body = value && typeof value === 'object' ? value as Record<string, unknown> : {}
+  const appId = typeof body.THREADS_APP_ID === 'string' ? body.THREADS_APP_ID.trim() : ''
+  const appSecret = typeof body.THREADS_APP_SECRET === 'string' ? body.THREADS_APP_SECRET.trim() : ''
+  if (!/^\d{3,40}$/.test(appId)) throw new AppError('VALIDATION_FAILED', 'Threads App ID must be 3–40 digits.', 400)
+  if (appSecret.length < 8 || appSecret.length > 512) throw new AppError('VALIDATION_FAILED', 'Threads App Secret must be 8–512 characters.', 400)
+  return {
+    THREADS_APP_ID: appId,
+    THREADS_APP_SECRET: appSecret,
+    THREADS_REDIRECT_URI: `${new URL(requestUrl).origin}/auth/threads/callback`,
+    THREADS_API_BASE_URL: 'https://graph.threads.com',
+    THREADS_API_VERSION: 'v1.0',
+  }
+}
+
 app.all('/api/session', (c) => c.json({ error: { code: 'NOT_FOUND', message: 'No in-app operator session is used.' } }, 404))
 
 app.get('/api/configuration', (c) => {
@@ -53,17 +107,102 @@ app.get('/api/configuration', (c) => {
   return c.json(productionConfigurationStatus(c.env, c.req.url, missing))
 })
 
-// Phase 5.1 deliberately exposes no configuration-write route. A Cloudflare
-// Pages write credential may only be used after deployment-level owner
-// authorization and secure server-side credential storage are provisioned.
-app.all('/api/configuration/apply', (c) => c.json({
-  error: {
-    code: 'OWNER_AUTHORIZATION_REQUIRED',
-    message: 'Production configuration writes are disabled. Use the owner-only Cloudflare setup checklist.',
-    retryable: false,
-    reauthorizationRequired: false,
-  },
-}, 403))
+app.get('/auth/cloudflare/start', async (c) => {
+  try {
+    await requireSetupOwner(c)
+    return c.redirect(await cloudflareOAuth(c.env, c.req.url).start(), 302)
+  } catch (error) {
+    const normalized = safeError(error)
+    return c.redirect(`/setup?cloudflare=error&code=${encodeURIComponent(normalized.code)}`, 302)
+  }
+})
+
+app.get('/auth/cloudflare/callback', async (c) => {
+  try {
+    await requireSetupOwner(c)
+    await cloudflareOAuth(c.env, c.req.url).callback({
+      state: c.req.query('state'), code: c.req.query('code'), error: c.req.query('error'),
+    })
+    return c.redirect('/setup?cloudflare=connected', 303)
+  } catch (error) {
+    const normalized = safeError(error)
+    return c.redirect(`/setup?cloudflare=error&code=${encodeURIComponent(normalized.code)}`, 303)
+  }
+})
+
+app.get('/api/cloudflare/status', async (c) => {
+  try {
+    await requireSetupOwner(c)
+    c.header('Cache-Control', 'no-store')
+    return c.json(await cloudflareStore(c.env).safeStatus(new Date()))
+  } catch (error) { return jsonError(c, error) }
+})
+
+app.get('/api/cloudflare/resources', async (c) => {
+  try {
+    await requireSetupOwner(c)
+    const { api } = await cloudflareApi(c.env)
+    const accounts = await api.listAccounts()
+    const resources = await Promise.all(accounts.map(async (account) => ({
+      ...account, projects: await api.listProjects(account.id),
+    })))
+    c.header('Cache-Control', 'no-store')
+    return c.json({ accounts: resources })
+  } catch (error) { return jsonError(c, error) }
+})
+
+app.post('/api/cloudflare/project', async (c) => {
+  try {
+    await requireSetupOwner(c)
+    assertSameOrigin(c.req.url, c.req.header('Origin'))
+    const body: Record<string, unknown> = await c.req.json<Record<string, unknown>>().catch(() => ({} as Record<string, unknown>))
+    const accountId = typeof body.accountId === 'string' ? body.accountId : ''
+    const projectName = typeof body.projectName === 'string' ? body.projectName : ''
+    if (!/^[a-f0-9]{32}$/i.test(accountId) || !/^[a-z0-9][a-z0-9-]{0,57}[a-z0-9]$|^[a-z0-9]$/i.test(projectName)) {
+      throw new AppError('VALIDATION_FAILED', 'Choose a valid authorized account and Pages project.', 400)
+    }
+    const { api } = await cloudflareApi(c.env)
+    const accounts = await api.listAccounts()
+    const account = accounts.find((item) => item.id === accountId)
+    if (!account) throw new AppError('PROJECT_BOUNDARY_VIOLATION', 'The selected account is not authorized.', 403)
+    await api.verifyProjectBoundary(accountId, projectName)
+    await cloudflareStore(c.env).selectProject(accountId, account.name, projectName, new Date())
+    return c.json({ status: 'selected', accountId, accountName: account.name, projectName })
+  } catch (error) { return jsonError(c, error) }
+})
+
+app.post('/api/cloudflare/disconnect', async (c) => {
+  try {
+    await requireSetupOwner(c)
+    assertSameOrigin(c.req.url, c.req.header('Origin'))
+    await cloudflareStore(c.env).disconnect()
+    return c.json({ status: 'not_connected' })
+  } catch (error) { return jsonError(c, error) }
+})
+
+app.get('/api/configuration/production', async (c) => {
+  try {
+    await requireSetupOwner(c)
+    const { api, credential } = await cloudflareApi(c.env)
+    if (!credential?.accountId || !credential.projectName) throw new AppError('CLOUDFLARE_PROJECT_REQUIRED', 'Select the authorized Pages project first.', 409)
+    c.header('Cache-Control', 'no-store')
+    return c.json(await api.configurationStatus(credential.accountId, credential.projectName))
+  } catch (error) { return jsonError(c, error) }
+})
+
+app.post('/api/configuration/apply', async (c) => {
+  try {
+    await requireSetupOwner(c)
+    assertSameOrigin(c.req.url, c.req.header('Origin'))
+    const contentLength = Number(c.req.header('content-length') || 0)
+    if (contentLength > 2048) throw new AppError('VALIDATION_FAILED', 'Configuration request is too large.', 413)
+    const input = parseConfigurationInput(await c.req.json().catch(() => ({})), c.req.url)
+    const { api, credential } = await cloudflareApi(c.env)
+    if (!credential?.accountId || !credential.projectName) throw new AppError('CLOUDFLARE_PROJECT_REQUIRED', 'Select the authorized Pages project first.', 409)
+    const status = await api.updateProduction(credential.accountId, credential.projectName, input)
+    return c.json({ ...status, deploymentRequired: true, message: 'Production bindings were verified. Redeploy the Pages project before the running application can use changed values.' })
+  } catch (error) { return jsonError(c, error) }
+})
 
 app.get('/api/connection/status', async (c) => {
   try {
@@ -168,8 +307,20 @@ function page(active: PageName) {
 </main></div><script type="module" src="/static/app.js"></script></body></html>`
 }
 
+function setupContent(): string {
+  return `<div class="page-intro"><p>Authorize the owner, connect Cloudflare, safely apply Threads configuration to Pages Production, then connect Threads.</p></div>
+  <section class="panel setup-panel" aria-labelledby="setup-welcome-title"><p class="eyebrow">Private single-owner tool</p><h2 id="setup-welcome-title">Production Configuration Center</h2><p>Cloudflare and Threads credentials stay server-side. Protect this application with Cloudflare Access; every bridge route verifies its signed owner assertion.</p></section>
+  <section class="panel" aria-labelledby="bridge-title"><div class="panel-heading"><div><p class="eyebrow">Cloudflare connection</p><h2 id="bridge-title">Owner-authorized Pages access</h2></div><span id="setup-bridge-badge" class="badge neutral">Checking</span></div><div id="setup-bridge"><div class="skeleton-lines"><span></span></div></div></section>
+  <section id="project-section" class="panel hidden" aria-labelledby="project-title"><div class="panel-heading"><div><p class="eyebrow">Authorized resources</p><h2 id="project-title">Choose a Pages project</h2></div></div><form id="project-form"><label for="project-select">Account and Pages project</label><select id="project-select" required></select><div class="actions"><button class="button primary" type="submit">Confirm project</button><button id="disconnect-cloudflare" class="button danger" type="button">Disconnect Cloudflare</button></div></form></section>
+  <section class="panel" aria-labelledby="readiness-title"><div class="panel-heading"><div><p class="eyebrow">Production environment</p><h2 id="readiness-title">Configuration readiness</h2></div><span id="setup-config-badge" class="badge neutral">Checking</span></div><div id="setup-readiness" class="readiness-list"><div class="skeleton-lines"><span></span><span></span></div></div><div class="actions setup-actions"><button id="recheck-configuration" class="button secondary" type="button">Re-check Configuration</button><button id="copy-redirect-uri" class="button ghost" type="button" data-copy-value="">Copy Redirect URI</button></div></section>
+  <section id="automatic-configuration" class="panel hidden" aria-labelledby="automatic-title"><div class="panel-heading"><div><p class="eyebrow">Secure Production write</p><h2 id="automatic-title">Configure automatically</h2></div></div><form id="configuration-form" autocomplete="off"><label for="threads-app-id">Threads App ID</label><input id="threads-app-id" name="THREADS_APP_ID" inputmode="numeric" pattern="[0-9]{3,40}" required><label for="threads-app-secret">Threads App Secret</label><input id="threads-app-secret" name="THREADS_APP_SECRET" type="password" minlength="8" maxlength="512" autocomplete="new-password" required><p class="muted-text">The secret travels only to this authenticated same-origin server route and is never returned.</p><button class="button primary" type="submit">Apply Production</button></form><div id="configuration-result" aria-live="polite"></div></section>
+  <section id="manual-setup" class="panel" aria-labelledby="manual-title"><div class="panel-heading"><div><p class="eyebrow">Owner bootstrap / fallback</p><h2 id="manual-title">Private Cloudflare OAuth client</h2></div></div><div id="manual-bootstrap"><div class="skeleton-lines"><span></span></div></div><p><strong>OAuth callback URL</strong><br><code id="cloudflare-callback-url">Checking…</code></p><p><strong>Threads callback URL</strong><br><code id="redirect-uri-suggestion">Checking…</code></p><div class="actions"><a id="open-oauth-clients" class="button secondary" href="https://dash.cloudflare.com/?to=/:account/oauth-clients" target="_blank" rel="noopener noreferrer">Open OAuth clients</a><a id="open-cloudflare" class="button ghost" href="https://dash.cloudflare.com/?to=/:account/workers-and-pages" target="_blank" rel="noopener noreferrer">Manual Variables / Secrets</a></div></section>
+  <section class="panel" aria-labelledby="setup-connection-title"><div class="panel-heading"><div><p class="eyebrow">Threads account</p><h2 id="setup-connection-title">Connection</h2></div><span id="setup-connection-badge" class="badge neutral">Checking</span></div><div id="setup-connection"><div class="skeleton-lines"><span></span></div></div></section>`
+}
+
 function content(active: PageName): string {
-  if (active === 'setup') return `<div class="page-intro"><p>Configure the Production environment, verify safe readiness, connect the owner’s Threads account, and continue to the dashboard.</p></div><section class="panel setup-panel" aria-labelledby="setup-welcome-title"><p class="eyebrow">Personal Operator Setup · Private single-owner tool</p><h2 id="setup-welcome-title">Production Configuration Center</h2><p>Server secrets are checked only as safe readiness states. This page reports Configured or Missing, never returns secret values, and has no mystery in-app operator password. Protect every production route with Cloudflare Access.</p></section><section class="panel" aria-labelledby="bridge-title"><div class="panel-heading"><div><p class="eyebrow">Cloudflare configuration bridge</p><h2 id="bridge-title">Owner authorization</h2></div><span id="setup-bridge-badge" class="badge neutral">Checking</span></div><div id="setup-bridge"><div class="skeleton-lines"><span></span></div></div></section><section class="panel" aria-labelledby="readiness-title"><div class="panel-heading"><div><p class="eyebrow">Production environment</p><h2 id="readiness-title">Configuration readiness</h2></div><span id="setup-config-badge" class="badge neutral">Checking</span></div><div id="setup-readiness" class="readiness-list"><div class="skeleton-lines"><span></span><span></span></div></div><div class="actions setup-actions"><button id="recheck-configuration" class="button secondary" type="button">Re-check Configuration</button><a id="open-cloudflare" class="button ghost" href="https://dash.cloudflare.com/?to=/:account/workers-and-pages" target="_blank" rel="noopener noreferrer">Open Cloudflare</a></div><p class="muted-text">Secrets remain encrypted server bindings. This browser receives status and safe setup metadata only.</p></section><section id="manual-setup" class="panel" aria-labelledby="manual-setup-title"><div class="panel-heading"><div><p class="eyebrow">Secure one-time fallback</p><h2 id="manual-setup-title">Configure Cloudflare Production</h2></div><span class="badge warning">Manual action</span></div><p>The official Pages API supports Production variables and encrypted <code>secret_text</code> bindings, but this deployment has no dedicated Cloudflare OAuth client or secure server-side authorization store. For safety, it does not accept raw API tokens or expose a configuration-write endpoint.</p><ol class="setup-checklist"><li>Open Cloudflare project <code>threads-tools</code>.</li><li>Open <strong>Settings → Variables and Secrets</strong> and select the <strong>Production</strong> environment.</li><li>Add the exact bindings below using the indicated type.</li><li>Save the bindings and redeploy if Cloudflare indicates a deployment is required.</li><li>Return here and select <strong>Re-check Configuration</strong>.</li><li>When every required item is ready, select <strong>Connect Threads</strong>.</li></ol><div class="configuration-reference" role="table" aria-label="Required Cloudflare Production bindings"><div class="reference-row" role="row"><code role="cell">THREADS_APP_ID</code><span role="cell">Variable</span><button class="copy-button" type="button" data-copy-value="THREADS_APP_ID">Copy name</button></div><div class="reference-row" role="row"><code role="cell">THREADS_APP_SECRET</code><span role="cell">Encrypted Secret</span><button class="copy-button" type="button" data-copy-value="THREADS_APP_SECRET">Copy name</button></div><div class="reference-row" role="row"><code role="cell">THREADS_REDIRECT_URI</code><span role="cell">Variable</span><button class="copy-button" type="button" data-copy-value="THREADS_REDIRECT_URI">Copy name</button></div><div class="reference-row" role="row"><code role="cell">THREADS_API_BASE_URL</code><span role="cell">Variable · optional default</span><button class="copy-button" type="button" data-copy-value="THREADS_API_BASE_URL">Copy name</button></div><div class="reference-row" role="row"><code role="cell">SESSION_SECRET</code><span role="cell">Encrypted Secret · 32+ chars</span><button class="copy-button" type="button" data-copy-value="SESSION_SECRET">Copy name</button></div></div><div class="safe-copy-card"><div><strong>Production Redirect URI</strong><code id="redirect-uri-suggestion">Loading safe value…</code></div><button id="copy-redirect-uri" class="button secondary" type="button">Copy Redirect URI</button></div></section><section class="panel" aria-labelledby="setup-connection-title"><div class="panel-heading"><div><p class="eyebrow">Threads account</p><h2 id="setup-connection-title">Connection</h2></div><span id="setup-connection-badge" class="badge neutral">Checking</span></div><div id="setup-connection"><div class="skeleton-lines"><span></span></div></div></section>`
+  if (active === 'setup') return setupContent()
+  if (false && active === 'setup') return `<div class="page-intro"><p>Configure the Production environment, verify safe readiness, connect the owner’s Threads account, and continue to the dashboard.</p></div><section class="panel setup-panel" aria-labelledby="setup-welcome-title"><p class="eyebrow">Personal Operator Setup · Private single-owner tool</p><h2 id="setup-welcome-title">Production Configuration Center</h2><p>Server secrets are checked only as safe readiness states. This page reports Configured or Missing, never returns secret values, and has no mystery in-app operator password. Protect every production route with Cloudflare Access.</p></section><section class="panel" aria-labelledby="bridge-title"><div class="panel-heading"><div><p class="eyebrow">Cloudflare configuration bridge</p><h2 id="bridge-title">Owner authorization</h2></div><span id="setup-bridge-badge" class="badge neutral">Checking</span></div><div id="setup-bridge"><div class="skeleton-lines"><span></span></div></div></section><section class="panel" aria-labelledby="readiness-title"><div class="panel-heading"><div><p class="eyebrow">Production environment</p><h2 id="readiness-title">Configuration readiness</h2></div><span id="setup-config-badge" class="badge neutral">Checking</span></div><div id="setup-readiness" class="readiness-list"><div class="skeleton-lines"><span></span><span></span></div></div><div class="actions setup-actions"><button id="recheck-configuration" class="button secondary" type="button">Re-check Configuration</button><a id="open-cloudflare" class="button ghost" href="https://dash.cloudflare.com/?to=/:account/workers-and-pages" target="_blank" rel="noopener noreferrer">Open Cloudflare</a></div><p class="muted-text">Secrets remain encrypted server bindings. This browser receives status and safe setup metadata only.</p></section><section id="manual-setup" class="panel" aria-labelledby="manual-setup-title"><div class="panel-heading"><div><p class="eyebrow">Secure one-time fallback</p><h2 id="manual-setup-title">Configure Cloudflare Production</h2></div><span class="badge warning">Manual action</span></div><p>The official Pages API supports Production variables and encrypted <code>secret_text</code> bindings, but this deployment has no dedicated Cloudflare OAuth client or secure server-side authorization store. For safety, it does not accept raw API tokens or expose a configuration-write endpoint.</p><ol class="setup-checklist"><li>Open Cloudflare project <code>threads-tools</code>.</li><li>Open <strong>Settings → Variables and Secrets</strong> and select the <strong>Production</strong> environment.</li><li>Add the exact bindings below using the indicated type.</li><li>Save the bindings and redeploy if Cloudflare indicates a deployment is required.</li><li>Return here and select <strong>Re-check Configuration</strong>.</li><li>When every required item is ready, select <strong>Connect Threads</strong>.</li></ol><div class="configuration-reference" role="table" aria-label="Required Cloudflare Production bindings"><div class="reference-row" role="row"><code role="cell">THREADS_APP_ID</code><span role="cell">Variable</span><button class="copy-button" type="button" data-copy-value="THREADS_APP_ID">Copy name</button></div><div class="reference-row" role="row"><code role="cell">THREADS_APP_SECRET</code><span role="cell">Encrypted Secret</span><button class="copy-button" type="button" data-copy-value="THREADS_APP_SECRET">Copy name</button></div><div class="reference-row" role="row"><code role="cell">THREADS_REDIRECT_URI</code><span role="cell">Variable</span><button class="copy-button" type="button" data-copy-value="THREADS_REDIRECT_URI">Copy name</button></div><div class="reference-row" role="row"><code role="cell">THREADS_API_BASE_URL</code><span role="cell">Variable · optional default</span><button class="copy-button" type="button" data-copy-value="THREADS_API_BASE_URL">Copy name</button></div><div class="reference-row" role="row"><code role="cell">SESSION_SECRET</code><span role="cell">Encrypted Secret · 32+ chars</span><button class="copy-button" type="button" data-copy-value="SESSION_SECRET">Copy name</button></div></div><div class="safe-copy-card"><div><strong>Production Redirect URI</strong><code id="redirect-uri-suggestion">Loading safe value…</code></div><button id="copy-redirect-uri" class="button secondary" type="button">Copy Redirect URI</button></div></section><section class="panel" aria-labelledby="setup-connection-title"><div class="panel-heading"><div><p class="eyebrow">Threads account</p><h2 id="setup-connection-title">Connection</h2></div><span id="setup-connection-badge" class="badge neutral">Checking</span></div><div id="setup-connection"><div class="skeleton-lines"><span></span></div></div></section>`
   if (active === 'settings') return `<div class="page-intro"><p>Connect one real Threads account through the server-side OAuth flow. Reconnect to grant publishing and existing read permissions.</p></div><section class="panel compact-panel"><div class="connected-strip"><span class="badge neutral">Personal setup</span><div><strong>Review setup at any time</strong><p>Check safe configuration readiness and connection state without exposing server values.</p></div><a class="button secondary" href="/setup">Open setup</a></div></section><section class="panel" aria-labelledby="connection-title"><div class="panel-heading"><div><p class="eyebrow">Threads account</p><h2 id="connection-title">Connection status</h2></div><span id="status-badge" class="badge neutral">Checking</span></div><div id="connection-loading" class="skeleton-lines"><span></span><span></span></div><div id="connection-content" class="hidden"></div></section><section class="panel security-note"><h2>Security boundary</h2><p>Authorization codes and tokens remain server-side. Tokens are encrypted in D1 and provider responses are normalized before reaching this browser. This app has no separate in-app operator password; protect a public deployment with Cloudflare Access.</p></section>`
   if (active === 'dashboard') return `<section class="dashboard-actions"><a class="button primary" href="/compose">Compose post</a><a class="button secondary" href="/posts">Browse posts</a></section><section id="dashboard-health" class="panel state-panel" aria-live="polite"><div class="skeleton-lines"><span></span></div></section><section id="dashboard-account" class="panel state-panel" aria-live="polite"><div class="skeleton-lines"><span></span><span></span></div></section><section class="summary-grid"><article id="dashboard-engagement" class="panel state-panel"><div class="skeleton-lines"><span></span><span></span></div></article><article id="dashboard-insights" class="panel state-panel"><div class="skeleton-lines"><span></span><span></span></div></article></section><section class="panel"><div class="panel-heading"><div><p class="eyebrow">Latest activity</p><h2>Recent posts</h2></div><a href="/posts">View all</a></div><div id="dashboard-posts" class="post-list"><div class="skeleton-lines"><span></span><span></span></div></div></section>`
   if (active === 'posts') return `<div class="page-intro"><p>Search and sort only the bounded pages loaded below. Load More preserves provider cursor pagination.</p></div><section class="panel"><div class="panel-heading"><div><p class="eyebrow">Owned media</p><h2>Your Threads posts</h2></div><span id="posts-count" class="badge neutral">Loading</span></div><form id="posts-controls" class="operator-controls" role="search"><label for="posts-search">Search loaded post text</label><input id="posts-search" type="search" placeholder="Search loaded posts…"><label for="posts-sort">Sort</label><select id="posts-sort"><option value="newest">Newest first</option><option value="oldest">Oldest first</option></select></form><p id="posts-filter-note" class="muted-text" role="status"></p><div id="posts-list" class="post-list"><div class="skeleton-lines"><span></span><span></span></div></div><button id="load-more-posts" class="button secondary hidden" type="button">Load more</button></section>`

@@ -66,15 +66,16 @@ Implemented:
 
 Implemented:
 
-- `/setup` now gives every missing Production binding an explicit action instead of an unexplained `Missing` label
-- Exact Cloudflare Production variable/secret names, binding types, project name, dashboard link, and one-time checklist
-- Safe copy controls for binding names and the deployment-derived Threads Redirect URI
-- Explicit `Re-check Configuration` action using a fresh `no-store` readiness response
-- Official Cloudflare Pages project PATCH contract adapter with `plain_text` / `secret_text` classification and safe response normalization
-- No public configuration-write capability: `/api/configuration/apply` rejects every request because this deployment has no dedicated Cloudflare OAuth client and secure server-side authorization store
-- Cloudflare Access remains the required owner-only deployment boundary; no mystery in-app password was reintroduced
+- Actionable `/setup → Connect Cloudflare → consent → callback → account/project confirmation → Apply Production → Re-check → Connect Threads` flow
+- Official private self-managed Cloudflare OAuth Authorization Code bridge using the documented authorization/token endpoints and server-side `client_secret_basic`
+- Cryptographically strong, expiring, hashed, single-use OAuth state; codes and credentials never enter normal browser state or responses
+- Cryptographic Cloudflare Access JWT verification (signature, issuer, audience, expiry, and exact owner email) on every bridge route; same-origin enforcement on mutations
+- Authorized account and Pages project discovery with server-side ownership verification before selection or writes
+- AES-GCM-encrypted Cloudflare OAuth access/refresh credential persistence in D1 using the existing `SESSION_SECRET` model
+- Official Pages Production read/PATCH/re-read flow, correct `plain_text` / `secret_text` classification, unrelated binding preservation, Preview isolation, safe repeated execution, and honest redeploy-required state
+- Password-style Threads secret entry that is cleared after submission and never echoed; manual bootstrap/fallback remains available
 
-The official Cloudflare OAuth Authorization Code flow and Pages Write permission can support a future automated bridge, but an OAuth client must first be provisioned and its resulting credential must have secure server-side lifecycle storage. This repository does not improvise that prerequisite, accept raw API tokens in the browser, or persist Cloudflare credentials in D1.
+The owner must still create the private Cloudflare OAuth client in **Manage Account → OAuth clients**, register the exact callback, select the minimum Pages read/write capabilities, and install the client secret directly as a server-side Production secret. Genspark implements the code but never receives or manages that secret.
 
 Not implemented:
 
@@ -85,13 +86,14 @@ Not implemented:
 ## Architecture
 
 ```text
-Browser UI → Hono server routes → Threads adapter → Meta Threads API
+Browser UI → owner-verified Hono routes → Cloudflare OAuth / Pages API
+           ↘ Threads adapter → Meta Threads API
                          ↓
                   Cloudflare D1
-          (state hashes + encrypted token)
+   (state hashes + AES-GCM-encrypted provider credentials)
 ```
 
-Provider calls live in `src/threads/`, orchestration in `src/services/`, session/cryptography in `src/auth/`, and persistence behind `src/storage/`. The browser consumes allow-listed normalized models only.
+Threads provider calls live in `src/threads/`, orchestration in `src/services/`, owner verification/cryptography in `src/auth/`, Cloudflare OAuth/Pages adapters in `src/cloudflare/`, and persistence behind D1 repositories. The browser consumes allow-listed normalized models only.
 
 ## Routes
 
@@ -115,8 +117,15 @@ There is no separate in-app operator password or application sign-in. Because th
 
 | Method | URI | Purpose |
 |---|---|---|
-| `GET` | `/api/configuration` | Fresh Production configured/missing state, bridge/fallback metadata, and safe redirect suggestion; no values |
-| `*` | `/api/configuration/apply` | Always `403 OWNER_AUTHORIZATION_REQUIRED`; no public write endpoint exists |
+| `GET` | `/api/configuration` | Fresh runtime configured/missing state plus safe bridge/bootstrap metadata; no values |
+| `GET` | `/auth/cloudflare/start` | Owner-only real Cloudflare OAuth initiation |
+| `GET` | `/auth/cloudflare/callback` | Owner-only state validation and server-side code exchange |
+| `GET` | `/api/cloudflare/status` | Safe encrypted-credential connection status |
+| `GET` | `/api/cloudflare/resources` | Authorized accounts and Pages projects, names/status only |
+| `POST` | `/api/cloudflare/project` | Owner-only verified account/project selection |
+| `POST` | `/api/cloudflare/disconnect` | Delete encrypted Cloudflare OAuth credentials |
+| `GET` | `/api/configuration/production` | Safe Pages Production presence/type re-check |
+| `POST` | `/api/configuration/apply` | Owner-only, same-origin, idempotent Pages Production merge/PATCH/re-read |
 | `GET` | `/api/connection/status` | Normalized connection state |
 | `POST` | `/api/connection/disconnect` | Delete encrypted connection credential |
 | `GET` | `/api/read/account` | Current normalized account profile |
@@ -172,7 +181,13 @@ Copy `.env.example` to `.dev.vars` for local development. Never commit `.dev.var
 | `THREADS_REDIRECT_URI` | Yes | Production Variable (`plain_text`) | Exact OAuth callback URI |
 | `THREADS_API_BASE_URL` | No | Production Variable (`plain_text`) | Defaults to `https://graph.threads.com` |
 | `THREADS_API_VERSION` | No | Production Variable (`plain_text`) | Defaults to `v1.0` |
-| `SESSION_SECRET` | Yes | Production encrypted Secret (`secret_text`) | Minimum 32 characters; token encryption key material |
+| `SESSION_SECRET` | Yes | Production encrypted Secret (`secret_text`) | Minimum 32 characters; Threads and Cloudflare credential encryption key material |
+| `CLOUDFLARE_OAUTH_CLIENT_ID` | For bridge | Production Variable (`plain_text`) | Private owner-created OAuth client ID |
+| `CLOUDFLARE_OAUTH_CLIENT_SECRET` | For bridge | Production encrypted Secret (`secret_text`) | Private OAuth client secret; Genspark never receives it |
+| `CLOUDFLARE_OAUTH_SCOPES` | For bridge | Production Variable (`plain_text`) | Space-separated exact scope IDs selected in Cloudflare |
+| `CF_ACCESS_TEAM_DOMAIN` | For bridge | Production Variable (`plain_text`) | Access issuer/team domain |
+| `CF_ACCESS_AUD` | For bridge | Production Variable (`plain_text`) | Access application audience |
+| `OWNER_EMAIL` | For bridge | Production Variable (`plain_text`) | Exact sole owner identity |
 
 Production values must be Cloudflare Pages bindings with the classifications above, not committed configuration. Secrets cannot be read back after saving and are never returned by the application.
 
@@ -180,8 +195,10 @@ Production values must be Cloudflare Pages bindings with the classifications abo
 
 Cloudflare D1 stores only:
 
-- `oauth_states`: state hash, expiry, and single-use consumption timestamp
+- `oauth_states`: Threads state hash, expiry, and single-use consumption timestamp
+- `cloudflare_oauth_states`: Cloudflare state hash, expiry, and single-use consumption timestamp
 - `threads_connections`: one account identity, timestamps, and AES-GCM encrypted access token
+- `cloudflare_oauth_connection`: AES-GCM encrypted access/refresh credentials plus selected non-secret account/project identifiers
 - `publish_requests`: opaque request ID, account ID, content hash, state, and normalized success result for 24-hour duplicate protection
 - `audit_events`: allow-listed event type, outcome, safe resource ID/error category, and timestamp; no post text, credentials, or provider payloads
 
@@ -230,20 +247,20 @@ npm run build
 Latest implementation gate:
 
 - TypeScript: passing
-- Automated tests: **70 passed / 70**
+- Automated tests: **79 passed / 79**
 - Production build: passing
 
-Automated tests cover provider success/errors, pagination, replies, period insight comparisons, post detail, safe audit allow-listing/pagination, text container creation, publish requests, validation, malformed responses, missing optional values, duplicate/ambiguous publish protection, capability states, direct no-password access, first-run/completed onboarding markers, configuration readiness and re-checks, owner authorization rejection, Cloudflare Production payload normalization, plain-text/secret-text classification, invalid/expired Cloudflare authorization, manual fallback state, connected/disconnected/expired Threads states, and browser credential boundaries.
+Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/token endpoints, strong state lifecycle, server-side token exchange/redaction, signed Access JWT owner verification, CSRF rejection, account/project discovery and ownership boundaries, encrypted credential-safe status, Production-only payloads, plain-text/secret-text classification, preservation of unrelated variables, post-write re-read, idempotent behavior, invalid/expired authorization, bootstrap fallback, and browser/log/response credential boundaries.
 
 ## Deployment
 
 - **Platform:** Cloudflare Pages + Hono + D1 (BYOK)
 - **Production:** https://threads-tools.pages.dev
-- **Deployment status:** Phase 5.1 active on Cloudflare Pages (BYOK), deployed and route-verified 2026-09-11
+- **Deployment status:** Previous Phase 5.1 fallback is active on Cloudflare Pages (BYOK); this real OAuth bridge revision is ready for redeploy and external owner bootstrap verification
 - **Verified deployment:** Production branch `main`; canonical `https://threads-tools.pages.dev` and the latest immutable deployment URL were both route-verified
 - **Provider configuration status:** Not configured; `/setup` now provides exact actions, safe copy controls, the secure manual Cloudflare fallback, and fresh re-checks without exposing values
 - **Private access:** Not yet verified/configured; the URL returned HTTP 200 without an Access challenge during deployment verification. Configure Cloudflare Access for all page, API, and OAuth routes before treating it as private. The application intentionally has no in-app operator password.
-- **D1:** `threads-tools-production`; migrations `0001_phase1_connection.sql`, `0002_phase3_publish_requests.sql`, and `0003_phase4_audit_events.sql` are applied
+- **D1:** `threads-tools-production`; migrations `0001`–`0003` are active and `0004_phase5_1_cloudflare_oauth.sql` adds encrypted Cloudflare OAuth persistence
 
 To activate the provider connection:
 
@@ -254,6 +271,4 @@ To activate the provider connection:
 
 ## Gate and next steps
 
-The Phase 5.1 implementation gate is **PASS** through the complete secure manual fallback: Production status/actions are live, the official API contract is modeled and tested, and all configuration writes remain denied without owner authorization. The overall connected-product verification remains **BLOCKED — production deployment-level private access, Production Threads bindings, and a real connected-account verification of onboarding, dashboard, post detail, engagement, period insights, and preserved publishing are still required**. Build success or a mocked provider test is not treated as real-world provider proof.
-
-Smallest next action: configure Cloudflare Access, add the six documented server environment values as Cloudflare Pages secrets, configure Meta's callback URI, connect with the existing scopes, and execute the real-account checklist above. Never paste secret values into source, GitHub, or chat.
+The Phase 5.1 code gate is **BLOCKED** despite passing automated checks because the required real production verification cannot be inferred from tests. The owner must create the private Cloudflare OAuth client, install its client secret and exact scope IDs directly in Cloudflare, configure Cloudflare Access and the three owner-boundary values, apply migration `0004`, redeploy, complete consent/account/project discovery/Production apply/redeploy/re-check, and then verify the existing real Threads connection and dashboard. Never paste any secret into source, GitHub, chat, or the public setup page.
