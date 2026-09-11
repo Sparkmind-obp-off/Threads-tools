@@ -133,9 +133,31 @@ Provider code `190` or HTTP 401 maps to a re-authentication instruction. Permiss
 
 Missing metric values remain absent/undefined and are never converted to zero.
 
+## Phase 5.1 Cloudflare Production configuration contract
+
+Verified against Cloudflare's official documentation on 2026-09-11:
+
+- Project endpoint: `PATCH /accounts/{account_id}/pages/projects/{project_name}`.
+- Target: `deployment_configs.production.env_vars`; no Preview configuration is included.
+- Safe values use `{ "type": "plain_text", "value": "..." }`.
+- `THREADS_APP_SECRET` and `SESSION_SECRET` use `{ "type": "secret_text", "value": "..." }`.
+- Updates modify supplied environment variables; deletion requires setting the key to `null`.
+- Required API permission: account-level **Pages Write**.
+- Cloudflare supports OAuth 2.0 Authorization Code clients, including private clients for members of the parent account.
+
+`src/cloudflare/pages.ts` models and tests this contract, but it is not connected to a public route. A secure automated bridge additionally requires a provisioned Cloudflare OAuth client, deployment-level owner authorization, and a secure server-side authorization lifecycle. Those prerequisites are absent, so Phase 5.1 uses the explicit manual fallback rather than accepting raw API tokens or persisting a Cloudflare credential in D1.
+
+Official Cloudflare references:
+
+- Pages project update: `https://developers.cloudflare.com/api/resources/pages/subresources/projects/methods/edit/`
+- Pages bindings / Variables and Secrets: `https://developers.cloudflare.com/pages/functions/bindings/`
+- API token permissions: `https://developers.cloudflare.com/fundamentals/api/reference/permissions/`
+- OAuth overview and client creation: `https://developers.cloudflare.com/fundamentals/oauth/` and `https://developers.cloudflare.com/fundamentals/oauth/create-an-oauth-client/`
+
 ## Phase 5 application endpoints
 
-- `GET /api/configuration` returns only allow-listed `configured` / `missing` readiness states and safe missing labels; no environment value is returned.
+- `GET /api/configuration` returns only allow-listed `configured` / `missing` readiness states, safe setup metadata, and a deployment-derived Redirect URI suggestion; no environment value is returned and the response is `no-store`.
+- `* /api/configuration/apply` always returns `403 OWNER_AUTHORIZATION_REQUIRED`; no unauthenticated configuration-write endpoint exists.
 - `GET /api/connection/status` returns only normalized account/connection metadata and never credentials.
 - The removed `/api/session` password endpoint is not replaced by another application password. Private URL access belongs at the deployment layer.
 

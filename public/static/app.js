@@ -165,16 +165,32 @@ async function loadSettings() {
   }
 }
 
-function readinessRow(label, status) {
+function readinessRow(label, status, action) {
   const configured = status === 'configured'
-  return `<div class="readiness-row"><span>${escapeHtml(label)}</span><span class="badge ${configured ? 'supported' : 'warning'}">${configured ? 'Configured' : 'Missing'}</span></div>`
+  return `<div class="readiness-row"><div><strong>${escapeHtml(label)}</strong><small>${configured ? 'Production binding detected.' : escapeHtml(action)}</small></div><span class="badge ${configured ? 'supported' : 'warning'}">${configured ? 'Configured' : 'Missing'}</span></div>`
+}
+
+async function copySafeValue(value, button) {
+  if (!value) return
+  try {
+    await navigator.clipboard.writeText(value)
+    const previous = button.textContent
+    button.textContent = 'Copied'
+    setTimeout(() => { button.textContent = previous }, 1400)
+  } catch {
+    button.textContent = 'Copy failed'
+  }
 }
 
 async function loadSetup() {
   const configBadge = $('#setup-config-badge')
   const readiness = $('#setup-readiness')
+  const bridgeBadge = $('#setup-bridge-badge')
+  const bridgeNode = $('#setup-bridge')
   const connectionBadge = $('#setup-connection-badge')
   const connectionNode = $('#setup-connection')
+  const recheckButton = $('#recheck-configuration')
+  if (recheckButton) { recheckButton.disabled = true; recheckButton.textContent = 'Checking…' }
   const [configuration, connection] = await Promise.allSettled([
     request('/api/configuration'), request('/api/connection/status'),
   ])
@@ -186,16 +202,26 @@ async function loadSetup() {
     configBadge.className = `badge ${configurationReady ? 'supported' : 'warning'}`
     configBadge.textContent = configurationReady ? 'Ready' : 'Action needed'
     readiness.innerHTML = [
-      ['Threads App ID', data.readiness.threadsAppId],
-      ['Threads App Secret', data.readiness.threadsAppSecret],
-      ['Redirect URI', data.readiness.redirectUri],
-      ['API Base URL', data.readiness.apiBaseUrl],
-      ['Secure token key', data.readiness.sessionSecret],
-    ].map(([label, status]) => readinessRow(label, status)).join('')
+      ['Threads App ID', data.readiness.threadsAppId, 'Add the App ID binding as a Production Variable.'],
+      ['Threads App Secret', data.readiness.threadsAppSecret, 'Add the App Secret binding as an encrypted Production Secret.'],
+      ['Redirect URI', data.readiness.redirectUri, 'Add the redirect binding as a Production Variable, then register the same URI with Meta.'],
+      ['API Base URL', data.readiness.apiBaseUrl, 'The secure default is active; an explicit Production Variable is optional.'],
+      ['Session/token encryption secret', data.readiness.sessionSecret, 'Add a 32+ character random value as an encrypted Production Secret.'],
+    ].map(([label, status, action]) => readinessRow(label, status, action)).join('')
+    bridgeBadge.className = 'badge warning'
+    bridgeBadge.textContent = 'Manual setup required'
+    bridgeNode.innerHTML = `<div class="bridge-state"><h3>Automated writes are safely disabled</h3><p>${escapeHtml(data.bridge.reason)}</p><p>Use the explicit owner-only checklist below. This application never accepts a raw Cloudflare API token in the browser.</p></div>`
+    const redirectSuggestion = data.actions?.redirectUriSuggestion
+    $('#redirect-uri-suggestion').textContent = redirectSuggestion || 'Unavailable'
+    $('#copy-redirect-uri').dataset.copyValue = redirectSuggestion || ''
+    $('#open-cloudflare').href = safeUrl(data.actions?.cloudflareDashboardUrl) || 'https://dash.cloudflare.com/'
   } else {
     configBadge.className = 'badge danger'; configBadge.textContent = 'Error'
     readiness.innerHTML = recoveryState(configuration.reason)
+    bridgeBadge.className = 'badge danger'; bridgeBadge.textContent = 'Check failed'
+    bridgeNode.innerHTML = capabilityState('Configuration status unavailable', 'No configuration write was attempted.', 'error')
   }
+  if (recheckButton) { recheckButton.disabled = false; recheckButton.textContent = 'Re-check Configuration' }
 
   if (connection.status === 'rejected') {
     connectionBadge.className = 'badge danger'; connectionBadge.textContent = 'Error'
@@ -208,7 +234,7 @@ async function loadSetup() {
     connectionBadge.className = 'badge neutral'; connectionBadge.textContent = 'Disconnected'
     connectionNode.innerHTML = configurationReady
       ? '<div class="empty-state"><h3>Connect the owner’s Threads account</h3><p>The existing server-side OAuth flow will validate state and store the resulting token encrypted in D1.</p><a class="button primary" href="/auth/threads/start">Connect Threads</a></div>'
-      : '<div class="empty-state"><h3>Finish server configuration first</h3><p>Add the missing values as server-side secrets, then return here to connect Threads.</p></div>'
+      : '<div class="empty-state"><h3>Finish Production configuration first</h3><p>Follow the Cloudflare checklist above, save the bindings, then select Re-check Configuration.</p><a class="text-link" href="#manual-setup">Open configuration checklist</a></div>'
     showResultNotice(connectionNode)
     return
   }
@@ -543,6 +569,8 @@ $('#posts-sort')?.addEventListener('change', renderLoadedPosts)
 $('#insight-period')?.addEventListener('change', loadInsightComparison)
 $('#load-more-replies')?.addEventListener('click', () => { $('#load-more-replies').textContent = 'Loading…'; loadReplies(selectedPostId, true) })
 $('#load-more-audit')?.addEventListener('click', () => { $('#load-more-audit').textContent = 'Loading…'; loadAudit(true) })
+$('#recheck-configuration')?.addEventListener('click', loadSetup)
+document.querySelectorAll('[data-copy-value]').forEach((button) => button.addEventListener('click', () => copySafeValue(button.dataset.copyValue, button)))
 async function init() {
   try { showConfiguration(await request('/api/configuration')) } catch { /* safe readiness is best effort */ }
   if (page !== 'setup' && !setupWasCompleted()) {

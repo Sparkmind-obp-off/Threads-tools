@@ -62,6 +62,20 @@ Implemented:
 - Setup review entry from the operator header and Connection/Settings
 - No registration, team, billing, invite, role, tenant, or other SaaS flows
 
+### Phase 5.1 — Production Configuration Center
+
+Implemented:
+
+- `/setup` now gives every missing Production binding an explicit action instead of an unexplained `Missing` label
+- Exact Cloudflare Production variable/secret names, binding types, project name, dashboard link, and one-time checklist
+- Safe copy controls for binding names and the deployment-derived Threads Redirect URI
+- Explicit `Re-check Configuration` action using a fresh `no-store` readiness response
+- Official Cloudflare Pages project PATCH contract adapter with `plain_text` / `secret_text` classification and safe response normalization
+- No public configuration-write capability: `/api/configuration/apply` rejects every request because this deployment has no dedicated Cloudflare OAuth client and secure server-side authorization store
+- Cloudflare Access remains the required owner-only deployment boundary; no mystery in-app password was reintroduced
+
+The official Cloudflare OAuth Authorization Code flow and Pages Write permission can support a future automated bridge, but an OAuth client must first be provisioned and its resulting credential must have secure server-side lifecycle storage. This repository does not improvise that prerequisite, accept raw API tokens in the browser, or persist Cloudflare credentials in D1.
+
 Not implemented:
 
 - Image, video, or carousel publishing (public media hosting/processing is not configured)
@@ -85,7 +99,7 @@ Provider calls live in `src/threads/`, orchestration in `src/services/`, session
 
 | Method | URI | Purpose |
 |---|---|---|
-| `GET` | `/setup` | Personal first-run configuration and Threads connection flow |
+| `GET` | `/setup` | Production Configuration Center, secure Cloudflare fallback, and Threads connection flow |
 | `GET` | `/` | Real-data operator dashboard |
 | `GET` | `/posts` | Owned Threads posts with bounded local search/sort and Load More |
 | `GET` | `/posts/:id` | Real post detail, available metrics, and top-level reply context |
@@ -101,7 +115,8 @@ There is no separate in-app operator password or application sign-in. Because th
 
 | Method | URI | Purpose |
 |---|---|---|
-| `GET` | `/api/configuration` | Safe configured/missing state; no values |
+| `GET` | `/api/configuration` | Fresh Production configured/missing state, bridge/fallback metadata, and safe redirect suggestion; no values |
+| `*` | `/api/configuration/apply` | Always `403 OWNER_AUTHORIZATION_REQUIRED`; no public write endpoint exists |
 | `GET` | `/api/connection/status` | Normalized connection state |
 | `POST` | `/api/connection/disconnect` | Delete encrypted connection credential |
 | `GET` | `/api/read/account` | Current normalized account profile |
@@ -150,16 +165,16 @@ See `docs/04_API_INTEGRATION_CONTRACT.md` for exact fields, metric context, pagi
 
 Copy `.env.example` to `.dev.vars` for local development. Never commit `.dev.vars` or real values.
 
-| Variable | Required | Purpose |
-|---|---:|---|
-| `THREADS_APP_ID` | Yes | Threads-specific App ID |
-| `THREADS_APP_SECRET` | Yes | Threads-specific App Secret; server-only |
-| `THREADS_REDIRECT_URI` | Yes | Exact OAuth callback URI |
-| `THREADS_API_BASE_URL` | No | Defaults to `https://graph.threads.com` |
-| `THREADS_API_VERSION` | No | Defaults to `v1.0` |
-| `SESSION_SECRET` | Yes | Minimum 32 characters; token encryption key material |
+| Variable | Required | Cloudflare Production type | Purpose |
+|---|---:|---|---|
+| `THREADS_APP_ID` | Yes | Production Variable (`plain_text`) | Threads-specific App ID |
+| `THREADS_APP_SECRET` | Yes | Production encrypted Secret (`secret_text`) | Threads-specific App Secret; server-only |
+| `THREADS_REDIRECT_URI` | Yes | Production Variable (`plain_text`) | Exact OAuth callback URI |
+| `THREADS_API_BASE_URL` | No | Production Variable (`plain_text`) | Defaults to `https://graph.threads.com` |
+| `THREADS_API_VERSION` | No | Production Variable (`plain_text`) | Defaults to `v1.0` |
+| `SESSION_SECRET` | Yes | Production encrypted Secret (`secret_text`) | Minimum 32 characters; token encryption key material |
 
-Production values must be Cloudflare Pages secrets, not committed configuration.
+Production values must be Cloudflare Pages bindings with the classifications above, not committed configuration. Secrets cannot be read back after saving and are never returned by the application.
 
 ## Data architecture
 
@@ -215,10 +230,10 @@ npm run build
 Latest implementation gate:
 
 - TypeScript: passing
-- Automated tests: **59 passed / 59**
+- Automated tests: **70 passed / 70**
 - Production build: passing
 
-Automated tests cover provider success/errors, pagination, replies, period insight comparisons, post detail, safe audit allow-listing/pagination, text container creation, publish requests, validation, malformed responses, missing optional values, duplicate/ambiguous publish protection, capability states, direct no-password access, first-run/completed onboarding markers, configuration readiness, connected/disconnected/expired connection states, and browser credential boundaries.
+Automated tests cover provider success/errors, pagination, replies, period insight comparisons, post detail, safe audit allow-listing/pagination, text container creation, publish requests, validation, malformed responses, missing optional values, duplicate/ambiguous publish protection, capability states, direct no-password access, first-run/completed onboarding markers, configuration readiness and re-checks, owner authorization rejection, Cloudflare Production payload normalization, plain-text/secret-text classification, invalid/expired Cloudflare authorization, manual fallback state, connected/disconnected/expired Threads states, and browser credential boundaries.
 
 ## Deployment
 
