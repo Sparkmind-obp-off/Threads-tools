@@ -9,17 +9,23 @@
 5. UI: dashboard, posts, compose, engagement, insights, connection states.
 6. E2E: connect account in a safe environment and publish a real test post.
 
-## Acceptance checklist
+## Phase 1 acceptance checklist
 
-- [ ] OAuth connection works.
-- [ ] Account identity loads.
+- [x] Missing configuration fails safely and is visible in the UI.
+- [x] OAuth initiation, callback, single-use state validation, and provider failures are covered by tests.
+- [x] Account identity is normalized and browser responses exclude tokens/secrets.
+- [x] Unsupported later-phase capabilities are clearly labelled.
+- [x] Type checking, automated tests, and production build pass.
+- [ ] A real operator-owned Threads tester/account completes OAuth in the deployed environment.
+
+The Phase 1 gate remains `BLOCKED — configuration required` until the final real-account item is verified.
+
+## Later-phase acceptance checklist
+
 - [ ] Real posts load.
 - [ ] Real supported engagement data loads.
 - [ ] Real supported insights load.
 - [ ] Real post can be created/published.
-- [ ] Unsupported capabilities are clearly labelled.
-- [ ] No secrets appear in browser source, logs, or repository.
-- [ ] Production build passes.
 
 ## Delivery rule
 
