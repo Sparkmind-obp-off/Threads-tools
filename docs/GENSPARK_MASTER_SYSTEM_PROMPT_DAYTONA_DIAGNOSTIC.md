@@ -20,7 +20,14 @@ Current flow:
 5. verify exact output `SparkPod OK`
 6. DELETE sandbox and verify cleanup
 
-Current problem: `DaytonaHttpError` keeps only HTTP status and a generic message. Therefore the provider response body/status context is lost before `normalizeDaytonaFailure()` runs. The resulting frontend message cannot tell whether the failure is authentication, sandbox creation, readiness, execution, verification, or cleanup.
+Current observed production failure:
+- `/setup` reaches the protected application endpoint successfully.
+- SparkPod is shown as `Configured`.
+- `Test Connection` returns `Provider network failure`.
+- The failure occurs at `Sandbox created` before any later lifecycle step starts.
+- Therefore the immediate problem is the Cloudflare Worker -> Daytona outbound request path, not Threads OAuth and not sandbox readiness/execution.
+
+The implementation must now make that distinction provable instead of guessing.
 
 ## IMPLEMENTATION REQUIREMENTS
 
@@ -40,7 +47,29 @@ Do NOT retain or return:
 
 Handle JSON and non-JSON error bodies safely. Truncate provider diagnostic text to a small bounded length (for example 500 characters) and normalize whitespace.
 
-### 2. Keep the existing Daytona API architecture unless verified otherwise
+### 2. Add a minimal owner-protected outbound preflight diagnostic
+Because production currently reports a network failure before sandbox creation, add the smallest possible diagnostic path to distinguish a generic Cloudflare outbound failure from a Daytona HTTP/API response.
+
+Requirements:
+- Keep it Owner-authenticated and same-origin, like the existing `/test` endpoint.
+- Do not accept or return credentials from the browser.
+- Use the resolved `DAYTONA_API_URL` on the server, defaulting to `https://app.daytona.io/api`.
+- Perform a minimal safe HTTP request to the Daytona API base or another verified lightweight Daytona endpoint.
+- If a response is received, return only safe metadata such as HTTP status, normalized provider code/type/message, and a classification.
+- If `fetch()` itself fails, return a safe classification such as `NETWORK`, `DNS`, `TLS`, or `TIMEOUT` only when the runtime error can reliably distinguish it; otherwise use `NETWORK`.
+- Never return the API key, Authorization header, cookies, request headers, or raw sensitive body.
+- Keep the diagnostic endpoint separate from the real lifecycle test; it must not create a sandbox.
+
+The purpose is diagnostic only:
+- 401/403 => Daytona endpoint is reachable; investigate credential/auth configuration.
+- 400/404/422 => endpoint is reachable; investigate API URL/path/contract.
+- 429/5xx => provider-side/transient response; retry may be appropriate.
+- successful HTTP response => Cloudflare can reach Daytona; continue investigating the real `POST /sandbox` request/contract.
+- fetch/DNS/TLS/connection failure => Cloudflare runtime cannot complete the outbound connection; do not mislabel this as invalid credentials.
+
+Do not expose this diagnostic publicly. Preserve existing Access/owner protection.
+
+### 3. Keep the existing Daytona API architecture unless verified otherwise
 Do not replace the current API with a different provider architecture merely because the test fails.
 The current expected API flow is:
 - API base: `https://app.daytona.io/api`
@@ -52,7 +81,7 @@ The current expected API flow is:
 
 Keep `DAYTONA_API_URL` configurable and HTTPS-only.
 
-### 3. Improve failure normalization
+### 4. Improve failure normalization
 `normalizeDaytonaFailure()` must use the preserved status/provider message to distinguish at least:
 - authentication / authorization failure (401/403 or clearly credential-related)
 - sandbox creation failure
@@ -78,12 +107,12 @@ Preferred shape:
 
 It is acceptable to include a separate safe diagnostic field such as `providerStatus` and/or `diagnostic` if useful, but never expose secrets.
 
-### 4. Correct retryability
+### 5. Correct retryability
 Authentication/configuration failures should not be marked retryable when retrying the exact same configuration cannot help.
 Transient provider/network/5xx failures may be retryable.
 Do not weaken authentication behavior.
 
-### 5. Preserve the five-step lifecycle UI
+### 6. Preserve the five-step lifecycle UI
 Do not remove or rename these step fields:
 - `sandboxCreated`
 - `sandboxReady`
@@ -94,13 +123,15 @@ Do not remove or rename these step fields:
 A failed stage must be shown as failed, later stages as `not_started` unless cleanup actually runs.
 Cleanup must still execute when a sandbox was created.
 
-### 6. Frontend
+### 7. Frontend
 Inspect `public/static/app.js` and the relevant setup UI.
 The frontend already consumes structured `error.code`, `error.message`, `error.retryable`, and `error.steps`.
 Only change frontend code if necessary to surface the newly safe diagnostic/status information clearly.
 Do not show secrets or raw authorization material.
 
-### 7. Add/adjust tests
+If a preflight diagnostic is added, show it only in the Owner setup/diagnostic area and label it clearly as a reachability diagnostic, not as proof that the full SparkPod lifecycle works.
+
+### 8. Add/adjust tests
 Add deterministic unit tests for:
 - 401 provider response
 - 403 provider response
@@ -111,6 +142,8 @@ Add deterministic unit tests for:
 - successful lifecycle
 - verification failure
 - cleanup failure
+- outbound preflight receives an HTTP response
+- outbound preflight fails at `fetch()`
 
 Tests must assert that:
 - provider status/message is preserved safely where intended
@@ -118,12 +151,14 @@ Tests must assert that:
 - existing five-step state behavior remains correct
 - authentication failures are non-retryable
 - transient failures remain retryable where appropriate
+- preflight never creates a sandbox
+- preflight remains protected by owner authentication
 
-### 8. Do not require real credentials in automated tests
+### 9. Do not require real credentials in automated tests
 Use mocked `fetch` responses for unit tests.
 The real production test must continue to use the Cloudflare Production Secret `DAYTONA_API_KEY` server-side.
 
-### 9. Security constraints
+### 10. Security constraints
 - No secrets in source control.
 - No secrets in browser responses.
 - No secrets in logs.
@@ -143,6 +178,8 @@ If repository CI exists, verify the relevant workflow result.
 Do NOT claim the real Daytona connection is fixed merely because unit tests pass.
 A real connection is only proven when the deployed `/api/sparkpod/daytona/test` endpoint successfully completes the lifecycle.
 
+The new preflight is diagnostic evidence only. It must be used to decide the next fix, not to declare `Connected`.
+
 ## DEPLOYMENT / REPORTING
 After implementation:
 - commit changes to `main`
@@ -152,6 +189,7 @@ After implementation:
 - report the exact production URL tested
 - report the exact failing lifecycle stage if real Daytona still fails
 - include the safe provider HTTP status/diagnostic if available
+- report the preflight classification/result separately
 - explicitly distinguish `Configured` from `Connected`
 
 ## STOP CONDITIONS
@@ -160,6 +198,7 @@ Stop and report instead of inventing a fix if:
 - Cloudflare production secret is unavailable to the deployment
 - Access/owner authentication prevents the endpoint from being tested
 - the provider returns an unexpected response that cannot be safely classified
+- the preflight proves a runtime-level outbound connectivity problem that cannot be fixed safely from application code
 
 ## FINAL REPORT FORMAT
 Use exactly this structure:
@@ -179,6 +218,7 @@ Use exactly this structure:
 - Configured: YES/NO
 - Connected: YES/NO
 - lifecycle stage reached
+- preflight classification/result
 - safe provider status/diagnostic
 
 ### REMAINING BLOCKER
