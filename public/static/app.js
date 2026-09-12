@@ -38,6 +38,9 @@ async function request(url, options = {}) {
     error.reauthorizationRequired = data.error?.reauthorizationRequired
     error.retryable = data.error?.retryable
     error.steps = data.error?.steps
+    error.providerStatus = data.error?.providerStatus
+    error.providerCode = data.error?.providerCode
+    error.diagnostic = data.error?.diagnostic
     throw error
   }
   return data
@@ -322,6 +325,8 @@ const sparkpodErrorMessages = {
   SPARKPOD_COMMAND_EXECUTION_FAILED: ['Command execution failed', 'The sandbox became ready, but the deterministic command could not be executed.'],
   SPARKPOD_OUTPUT_VERIFICATION_FAILED: ['Output verification failed', 'The command completed, but its server-side deterministic result did not match the expected proof.'],
   SPARKPOD_CLEANUP_FAILED: ['Cleanup failed', 'The test ran, but the sandbox could not be deleted. Auto-delete remains enabled.'],
+  SPARKPOD_DAYTONA_TIMEOUT: ['Provider timeout', 'The Daytona request exceeded the bounded connection-test timeout.'],
+  SPARKPOD_DAYTONA_NETWORK_FAILED: ['Provider network failure', 'Cloudflare could not complete the network request to Daytona.'],
 }
 
 function sparkpodSteps(steps = {}) {
@@ -377,7 +382,12 @@ async function testSparkPod() {
     result.innerHTML = `<div class="alert success"><strong>✓ Daytona connected</strong><p>Cloudflare Secret → Daytona → Sandbox → Readiness → Execute → Verify → Cleanup completed successfully.</p></div>${sparkpodSteps(response)}`
   } catch (error) {
     const [title, guidance] = sparkpodErrorMessages[error.code] || ['Connection test failed', error.message || 'SparkPod could not complete the verification flow.']
-    result.innerHTML = `<div class="alert error"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(guidance)}</p></div>${sparkpodSteps(error.steps)}`
+    const providerDetails = [
+      Number.isInteger(error.providerStatus) ? `HTTP ${error.providerStatus}` : '',
+      error.providerCode ? `Code: ${error.providerCode}` : '',
+      error.diagnostic || '',
+    ].filter(Boolean).map(escapeHtml).join(' — ')
+    result.innerHTML = `<div class="alert error"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(guidance)}</p>${providerDetails ? `<p><strong>Safe Daytona diagnostic:</strong> ${providerDetails}</p>` : ''}<p><strong>Retryable:</strong> ${error.retryable ? 'Yes' : 'No'}</p></div>${sparkpodSteps(error.steps)}`
   } finally {
     button.textContent = 'Test Connection'; button.removeAttribute('aria-busy')
     await loadSparkPod()

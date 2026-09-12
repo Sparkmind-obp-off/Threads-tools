@@ -84,7 +84,9 @@ Implemented:
 - Focused `/setup` status and connection-test experience positioning SparkPod as the remote execution layer behind the future AI Business Operator
 - Server-only `DAYTONA_API_KEY` consumption from a Cloudflare Production Secret; no browser credential entry and no D1 credential persistence
 - Bounded Daytona verification flow: create a sandbox with auto-delete and a hard 10-minute TTL → wait for readiness → execute a deterministic command → verify output server-side → explicitly delete and verify cleanup, including when startup fails
-- Clear configured/not-configured status, successful step results, and separate secret, authentication, creation, execution, and cleanup failures
+- Clear configured/not-configured status, successful step results, and separate authentication, creation, readiness, execution, verification, cleanup, timeout, and network failures
+- Bounded safe provider diagnostics (`providerStatus`, allow-listed message/code text up to 500 characters) with credential redaction; provider raw bodies, authorization headers, and secrets are never returned
+- `Configured` means only that `DAYTONA_API_KEY` exists; only a successful five-step production lifecycle proves `Connected`
 - Worker-compatible Daytona REST integration that preserves the existing Hono route architecture without shipping Node-only SDK internals to Cloudflare
 
 Not implemented:

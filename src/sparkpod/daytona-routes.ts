@@ -40,12 +40,57 @@ interface DaytonaCommandResult {
 const DEFAULT_API_URL = 'https://app.daytona.io/api'
 const DEFAULT_TARGET = 'us' as const
 const REQUEST_TIMEOUT_MS = 20_000
+const PROVIDER_DIAGNOSTIC_LIMIT = 500
 
 class DaytonaHttpError extends Error {
-  constructor(public readonly status: number, message: string) {
-    super(message)
+  constructor(
+    public readonly status: number,
+    public readonly providerMessage?: string,
+    public readonly providerCode?: string,
+  ) {
+    super(`Daytona request failed with status ${status}.`)
     this.name = 'DaytonaHttpError'
   }
+}
+
+class DaytonaFailure extends AppError {
+  constructor(
+    code: string,
+    message: string,
+    status: number,
+    retryable: boolean,
+    public readonly providerStatus?: number,
+    public readonly diagnostic?: string,
+    public readonly providerCode?: string,
+  ) {
+    super(code, message, status, retryable)
+    this.name = 'DaytonaFailure'
+  }
+}
+
+function safeDiagnostic(value: unknown, apiKey = ''): string | undefined {
+  if (typeof value !== 'string') return undefined
+  let text = value
+    .replace(/\s+/g, ' ')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
+    .replace(/((?:api[_-]?key|access[_-]?token|authorization|cookie)\s*[=:]\s*)[^\s,;}"]+/gi, '$1[REDACTED]')
+    .trim()
+  if (apiKey) text = text.split(apiKey).join('[REDACTED]')
+  if (!text) return undefined
+  return text.slice(0, PROVIDER_DIAGNOSTIC_LIMIT)
+}
+
+function providerErrorDetails(raw: string, apiKey: string): { message?: string; code?: string } {
+  let parsed: unknown
+  try { parsed = JSON.parse(raw) } catch { return { message: safeDiagnostic(raw, apiKey) } }
+  if (!parsed || typeof parsed !== 'object') return { message: safeDiagnostic(raw, apiKey) }
+
+  const body = parsed as Record<string, unknown>
+  const nested = body.error && typeof body.error === 'object' ? body.error as Record<string, unknown> : undefined
+  const message = [body.message, body.detail, body.title, typeof body.error === 'string' ? body.error : undefined,
+    nested?.message, nested?.detail, nested?.title].find((value) => typeof value === 'string')
+  const code = [body.code, body.type, body.errorCode, nested?.code, nested?.type].find((value) => typeof value === 'string')
+  return { message: safeDiagnostic(message, apiKey), code: safeDiagnostic(code, apiKey)?.slice(0, 100) }
 }
 
 export class DaytonaClient {
@@ -75,9 +120,13 @@ export class DaytonaClient {
         signal: controller.signal,
         headers: { ...this.headers, ...(init.headers || {}) },
       })
-      if (!response.ok) throw new DaytonaHttpError(response.status, `Daytona request failed with status ${response.status}.`)
       if (response.status === 204) return undefined as T
-      return response.json<T>()
+      const raw = await response.text()
+      if (!response.ok) {
+        const details = providerErrorDetails(raw, this.apiKey)
+        throw new DaytonaHttpError(response.status, details.message, details.code)
+      }
+      return JSON.parse(raw) as T
     } finally {
       clearTimeout(timeout)
     }
@@ -158,8 +207,15 @@ async function requireSetupOwner(c: DaytonaContext): Promise<void> {
   })
 }
 
-function jsonError(error: unknown, steps?: TestSteps) {
-  if (error instanceof AppError) return { error: { code: error.code, message: error.message, retryable: error.retryable, steps } }
+export function jsonError(error: unknown, steps?: TestSteps) {
+  if (error instanceof AppError) {
+    const diagnostic = error instanceof DaytonaFailure ? {
+      providerStatus: error.providerStatus,
+      diagnostic: error.diagnostic,
+      providerCode: error.providerCode,
+    } : {}
+    return { error: { code: error.code, message: error.message, retryable: error.retryable, steps, ...diagnostic } }
+  }
   return { error: { code: 'SPARKPOD_DAYTONA_ERROR', message: 'Daytona connection test failed unexpectedly.', retryable: true, steps } }
 }
 
@@ -201,25 +257,65 @@ function providerStatus(error: unknown): number | undefined {
 export function normalizeDaytonaFailure(error: unknown, stage: TestStage): AppError {
   if (error instanceof AppError) return error
   const status = providerStatus(error)
-  const message = error instanceof Error ? error.message : ''
-  const authenticationFailure = status === 401 || status === 403 || /auth|api.?key|credential|forbidden|unauthor/i.test(message)
+  const providerMessage = error instanceof DaytonaHttpError ? error.providerMessage : undefined
+  const providerCode = error instanceof DaytonaHttpError ? error.providerCode : undefined
+  const internalMessage = error instanceof Error ? error.message : ''
+  const classificationText = `${providerMessage || ''} ${providerCode || ''} ${internalMessage}`
+  const authenticationFailure = status === 401 || status === 403
+    || /(?:invalid|expired|missing|rejected|revoked)\s+(?:auth(?:entication|orization)?|api.?key|credential|token)|(?:forbidden|unauthori[sz]ed)/i.test(classificationText)
+  const timedOut = error instanceof DOMException && error.name === 'AbortError'
+    || /timeout|timed out|did not .* before timeout/i.test(internalMessage)
+  const networkFailure = !status && (error instanceof TypeError || /network|fetch|connection|socket|dns/i.test(internalMessage))
+  const retryable = status === 429 || (typeof status === 'number' && status >= 500) || status === undefined
 
-  if (stage === 'create' && authenticationFailure) {
-    return new AppError('SPARKPOD_AUTHENTICATION_FAILED', 'Daytona authentication failed. Verify the configured Cloudflare Production Secret.', 401)
+  if (authenticationFailure) {
+    return new DaytonaFailure(
+      'SPARKPOD_AUTHENTICATION_FAILED',
+      'Daytona rejected the configured credential. Verify DAYTONA_API_KEY in Cloudflare Production Secrets before retrying.',
+      401,
+      false,
+      status,
+      providerMessage,
+      providerCode,
+    )
   }
+  if (timedOut) {
+    return new DaytonaFailure(
+      'SPARKPOD_DAYTONA_TIMEOUT',
+      `The Daytona connection test timed out during ${stage}.`,
+      504,
+      true,
+      status,
+      providerMessage,
+      providerCode,
+    )
+  }
+  if (networkFailure) {
+    return new DaytonaFailure(
+      'SPARKPOD_DAYTONA_NETWORK_FAILED',
+      `The Daytona network request failed during ${stage}.`,
+      502,
+      true,
+      status,
+      providerMessage,
+      providerCode,
+    )
+  }
+
+  const details = { providerStatus: status, diagnostic: providerMessage, providerCode }
   if (stage === 'create') {
-    return new AppError('SPARKPOD_SANDBOX_CREATION_FAILED', 'Daytona could not create the test sandbox.', 502, true)
+    return new DaytonaFailure('SPARKPOD_SANDBOX_CREATION_FAILED', 'Daytona could not create the test sandbox.', 502, retryable, details.providerStatus, details.diagnostic, details.providerCode)
   }
   if (stage === 'readiness') {
-    return new AppError('SPARKPOD_SANDBOX_READINESS_FAILED', 'The Daytona sandbox was created but did not become ready.', 502, true)
+    return new DaytonaFailure('SPARKPOD_SANDBOX_READINESS_FAILED', 'The Daytona sandbox was created but did not become ready.', 502, retryable, details.providerStatus, details.diagnostic, details.providerCode)
   }
   if (stage === 'execute') {
-    return new AppError('SPARKPOD_COMMAND_EXECUTION_FAILED', 'The command could not be executed successfully in the Daytona sandbox.', 502, true)
+    return new DaytonaFailure('SPARKPOD_COMMAND_EXECUTION_FAILED', 'The command could not be executed successfully in the Daytona sandbox.', 502, retryable, details.providerStatus, details.diagnostic, details.providerCode)
   }
   if (stage === 'verify') {
-    return new AppError('SPARKPOD_OUTPUT_VERIFICATION_FAILED', 'The Daytona command completed but its deterministic output could not be verified.', 502, true)
+    return new DaytonaFailure('SPARKPOD_OUTPUT_VERIFICATION_FAILED', 'The Daytona command completed but its deterministic output could not be verified.', 502, false, details.providerStatus, details.diagnostic, details.providerCode)
   }
-  return new AppError('SPARKPOD_CLEANUP_FAILED', 'The test completed, but the Daytona sandbox could not be deleted. Auto-delete remains enabled.', 502, true)
+  return new DaytonaFailure('SPARKPOD_CLEANUP_FAILED', 'The test completed, but the Daytona sandbox could not be deleted. Auto-delete remains enabled.', 502, retryable, details.providerStatus, details.diagnostic, details.providerCode)
 }
 
 routes.get('/status', async (c) => {
