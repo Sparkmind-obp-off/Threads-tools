@@ -9,10 +9,12 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
+    "sparkpod:daytona": "node sparkpod/daytona-smoke.mjs",
     "db:migrate:local": "wrangler d1 migrations apply threads-tools-production --local",
     "preview": "wrangler pages dev dist --d1=threads-tools-production --local --ip 0.0.0.0 --port 3000"
   },
   "dependencies": {
+    "@daytona/sdk": "^0.198.0",
     "hono": "^4.9.7"
   },
   "devDependencies": {
