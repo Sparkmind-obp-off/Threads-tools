@@ -77,8 +77,19 @@ Implemented:
 
 The owner must still create the private Cloudflare OAuth client in **Manage Account → OAuth clients**, register the exact callback, select the minimum Pages read/write capabilities, and install the client secret directly as a server-side Production secret. Genspark implements the code but never receives or manages that secret.
 
+### SparkPod — Remote execution foundation
+
+Implemented:
+
+- Focused `/setup` status and connection-test experience positioning SparkPod as the remote execution layer behind the future AI Business Operator
+- Server-only `DAYTONA_API_KEY` consumption from a Cloudflare Production Secret; no browser credential entry and no D1 credential persistence
+- Bounded Daytona verification flow: create an auto-delete sandbox → execute a deterministic command → verify output → explicitly delete and verify cleanup
+- Clear configured/not-configured status, successful step results, and separate secret, authentication, creation, execution, and cleanup failures
+- Worker-compatible Daytona REST integration that preserves the existing Hono route architecture without shipping Node-only SDK internals to Cloudflare
+
 Not implemented:
 
+- Browser terminal, file explorer, full IDE/workspace, workspace management, multi-provider UI, SparkPod billing, or SparkPod team management
 - Image, video, or carousel publishing (public media hosting/processing is not configured)
 - Reply moderation or automated replies
 - DMs, Instagram, Make.com, bulk engagement, multi-user SaaS, or demand intelligence
@@ -137,6 +148,8 @@ There is no separate in-app operator password or application sign-in. Because th
 | `GET` | `/api/read/insights/account/compare?days=7|14|30` | Two comparable account-insight periods, excluding follower snapshot metrics |
 | `GET` | `/api/audit/events?after=&limit=` | Bounded safe operational events |
 | `POST` | `/api/publish/posts` | Validate and publish one text post with a client-generated request ID |
+| `GET` | `/api/sparkpod/daytona/status` | Owner-only safe SparkPod configuration status; never returns the secret value |
+| `POST` | `/api/sparkpod/daytona/test` | Owner-only same-origin create → execute → verify → cleanup test |
 | `GET` | `/auth/threads/start` | OAuth initiation |
 | `GET` | `/auth/threads/callback` | OAuth callback/state validation |
 
@@ -188,6 +201,9 @@ Copy `.env.example` to `.dev.vars` for local development. Never commit `.dev.var
 | `CF_ACCESS_TEAM_DOMAIN` | For bridge | Production Variable (`plain_text`) | Access issuer/team domain |
 | `CF_ACCESS_AUD` | For bridge | Production Variable (`plain_text`) | Access application audience |
 | `OWNER_EMAIL` | For bridge | Production Variable (`plain_text`) | Exact sole owner identity |
+| `DAYTONA_API_KEY` | For SparkPod | Production encrypted Secret (`secret_text`) | Daytona infrastructure credential; read only by the server-side SparkPod route |
+| `DAYTONA_API_URL` | No | Production Variable (`plain_text`) | Optional Daytona API override; defaults to `https://app.daytona.io/api` |
+| `DAYTONA_TARGET` | No | Production Variable (`plain_text`) | Optional Daytona target; `us` by default, or `eu` |
 
 Production values must be Cloudflare Pages bindings with the classifications above, not committed configuration. Secrets cannot be read back after saving and are never returned by the application.
 
@@ -202,7 +218,7 @@ Cloudflare D1 stores only:
 - `publish_requests`: opaque request ID, account ID, content hash, state, and normalized success result for 24-hour duplicate protection
 - `audit_events`: allow-listed event type, outcome, safe resource ID/error category, and timestamp; no post text, credentials, or provider payloads
 
-Posts, replies, and insights are fetched on demand and are not persisted. Post text is not persisted in the duplicate-protection table. No access token, refresh token, App Secret, OAuth code, or provider Authorization header is returned to browser APIs or rendered HTML.
+Posts, replies, and insights are fetched on demand and are not persisted. Post text is not persisted in the duplicate-protection table. Daytona credentials are never stored in D1; migration `0006_remove_sparkpod_daytona_credentials.sql` removes the legacy credential table and any historical contents. `DAYTONA_API_KEY` remains a Cloudflare Production Secret and is used only in server-to-server requests. No access token, refresh token, App Secret, OAuth code, Daytona secret, or provider Authorization header is returned to browser APIs or rendered HTML.
 
 ## Local setup
 
@@ -247,16 +263,16 @@ npm run build
 Latest implementation gate:
 
 - TypeScript: passing
-- Automated tests: **79 passed / 79**
+- Automated tests: **84 passed / 84**
 - Production build: passing
 
-Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/token endpoints, strong state lifecycle, server-side token exchange/redaction, signed Access JWT owner verification, CSRF rejection, account/project discovery and ownership boundaries, encrypted credential-safe status, Production-only payloads, plain-text/secret-text classification, preservation of unrelated variables, post-write re-read, idempotent behavior, invalid/expired authorization, bootstrap fallback, and browser/log/response credential boundaries.
+Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/token endpoints, strong state lifecycle, server-side token exchange/redaction, signed Access JWT owner verification, CSRF rejection, account/project discovery and ownership boundaries, encrypted credential-safe status, Production-only payloads, plain-text/secret-text classification, preservation of unrelated variables, post-write re-read, idempotent behavior, invalid/expired authorization, bootstrap fallback, browser/log/response credential boundaries, SparkPod UI security, and Daytona stage-specific failure normalization.
 
 ## Deployment
 
 - **Platform:** Cloudflare Pages + Hono + D1 (BYOK)
 - **Production:** https://threads-tools.pages.dev
-- **Deployment status:** Previous Phase 5.1 fallback is active on Cloudflare Pages (BYOK); this real OAuth bridge revision is ready for redeploy and external owner bootstrap verification
+- **Deployment status:** SparkPod remote-execution foundation is implemented and ready for Cloudflare Pages BYOK deployment and owner-only production verification
 - **Verified deployment:** Production branch `main`; canonical `https://threads-tools.pages.dev` and the latest immutable deployment URL were both route-verified
 - **Provider configuration status:** Not configured; `/setup` now provides exact actions, safe copy controls, the secure manual Cloudflare fallback, and fresh re-checks without exposing values
 - **Private access:** Not yet verified/configured; the URL returned HTTP 200 without an Access challenge during deployment verification. Configure Cloudflare Access for all page, API, and OAuth routes before treating it as private. The application intentionally has no in-app operator password.
@@ -264,7 +280,7 @@ Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/tok
 
 To activate the provider connection:
 
-1. Follow `/setup`: add safe values as Production Variables and `THREADS_APP_SECRET` / `SESSION_SECRET` as encrypted Production Secrets (`OPERATOR_PASSWORD` is not used).
+1. Follow `/setup`: add safe values as Production Variables and `THREADS_APP_SECRET` / `SESSION_SECRET` as encrypted Production Secrets (`OPERATOR_PASSWORD` is not used). Keep the existing `DAYTONA_API_KEY` only as a Cloudflare Production Secret; never enter it in the application.
 2. Set `THREADS_REDIRECT_URI=https://threads-tools.pages.dev/auth/threads/callback`.
 3. Add that exact URI to Meta's valid OAuth redirect URIs.
 4. Connect/reconnect from `/setup` so the token grant includes `threads_content_publish`.

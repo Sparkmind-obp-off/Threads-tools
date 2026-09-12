@@ -37,6 +37,7 @@ async function request(url, options = {}) {
     error.status = response.status
     error.reauthorizationRequired = data.error?.reauthorizationRequired
     error.retryable = data.error?.retryable
+    error.steps = data.error?.steps
     throw error
   }
   return data
@@ -310,7 +311,73 @@ async function loadCloudflareConnection(configuration) {
   }
 }
 
+const sparkpodErrorMessages = {
+  SPARKPOD_SECRET_MISSING: ['Secret missing', 'Add DAYTONA_API_KEY as a Cloudflare Production Secret, redeploy, then re-check.'],
+  SPARKPOD_AUTHENTICATION_FAILED: ['Authentication failed', 'Daytona rejected the configured credential. Verify the Production Secret in Cloudflare.'],
+  SPARKPOD_SANDBOX_CREATION_FAILED: ['Sandbox creation failed', 'Daytona connected, but could not create the isolated test sandbox.'],
+  SPARKPOD_COMMAND_EXECUTION_FAILED: ['Command execution failed', 'The sandbox was created, but the verification command did not complete successfully.'],
+  SPARKPOD_CLEANUP_FAILED: ['Cleanup failed', 'The test ran, but the sandbox could not be deleted. Auto-delete remains enabled.'],
+}
+
+function sparkpodSteps(steps = {}) {
+  const items = [
+    ['sandboxCreated', 'Sandbox created'],
+    ['commandExecuted', 'Command executed successfully'],
+    ['sandboxCleanedUp', 'Sandbox cleaned up'],
+  ]
+  return `<ol class="sparkpod-steps">${items.map(([key, label]) => {
+    const status = steps[key] || 'not_started'
+    const symbol = status === 'completed' ? '✓' : status === 'failed' ? '×' : '–'
+    return `<li class="${escapeHtml(status)}"><span aria-hidden="true">${symbol}</span>${escapeHtml(label)}</li>`
+  }).join('')}</ol>`
+}
+
+async function loadSparkPod() {
+  const badge = $('#sparkpod-status-badge')
+  const statusText = $('#sparkpod-status-text')
+  const button = $('#test-sparkpod')
+  const result = $('#sparkpod-test-result')
+  if (!badge || !statusText || !button) return
+  badge.className = 'badge neutral'; badge.textContent = 'Checking'
+  statusText.textContent = 'Checking configuration…'; button.disabled = true
+  try {
+    const status = await request('/api/sparkpod/daytona/status')
+    badge.className = `badge ${status.configured ? 'supported' : 'warning'}`
+    badge.textContent = status.configured ? 'Configured' : 'Not configured'
+    statusText.textContent = status.configured ? 'Configured' : 'Not configured'
+    button.disabled = !status.configured
+    if (!status.configured) {
+      result.classList.remove('hidden')
+      result.innerHTML = '<div class="alert warning"><strong>Secret missing</strong><p>Add <code>DAYTONA_API_KEY</code> as a Cloudflare Production Secret, then redeploy. Credentials are never entered or stored here.</p></div>'
+    } else if (!result.dataset.tested) result.classList.add('hidden')
+  } catch (error) {
+    badge.className = 'badge danger'; badge.textContent = 'Status unavailable'
+    statusText.textContent = 'Owner verification required'
+    result.classList.remove('hidden')
+    result.innerHTML = `<div class="alert error"><strong>Unable to verify SparkPod</strong><p>${escapeHtml(error.message)}</p></div>`
+  }
+}
+
+async function testSparkPod() {
+  const button = $('#test-sparkpod')
+  const result = $('#sparkpod-test-result')
+  button.disabled = true; button.textContent = 'Testing…'; button.setAttribute('aria-busy', 'true')
+  result.dataset.tested = 'true'; result.classList.remove('hidden')
+  result.innerHTML = `<div class="sparkpod-running"><strong>Testing the remote execution foundation…</strong>${sparkpodSteps()}</div>`
+  try {
+    const response = await request('/api/sparkpod/daytona/test', { method: 'POST', headers: { Origin: location.origin } })
+    result.innerHTML = `<div class="alert success"><strong>✓ Daytona connected</strong><p>Cloudflare Secret → Daytona → Sandbox → Execute → Cleanup completed successfully.</p></div>${sparkpodSteps(response.steps)}`
+  } catch (error) {
+    const [title, guidance] = sparkpodErrorMessages[error.code] || ['Connection test failed', error.message || 'SparkPod could not complete the verification flow.']
+    result.innerHTML = `<div class="alert error"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(guidance)}</p></div>${sparkpodSteps(error.steps)}`
+  } finally {
+    button.textContent = 'Test Connection'; button.removeAttribute('aria-busy')
+    await loadSparkPod()
+  }
+}
+
 async function loadSetup() {
+  void loadSparkPod()
   const configBadge = $('#setup-config-badge')
   const readiness = $('#setup-readiness')
   const connectionBadge = $('#setup-connection-badge')
@@ -723,6 +790,7 @@ $('#recheck-configuration')?.addEventListener('click', loadSetup)
 $('#project-form')?.addEventListener('submit', selectCloudflareProject)
 $('#configuration-form')?.addEventListener('submit', applyProductionConfiguration)
 $('#disconnect-cloudflare')?.addEventListener('click', disconnectCloudflare)
+$('#test-sparkpod')?.addEventListener('click', testSparkPod)
 document.querySelectorAll('[data-copy-value]').forEach((button) => button.addEventListener('click', () => copySafeValue(button.dataset.copyValue, button)))
 async function init() {
   try { showConfiguration(await request('/api/configuration')) } catch { /* safe readiness is best effort */ }
