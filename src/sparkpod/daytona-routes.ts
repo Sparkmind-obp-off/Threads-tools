@@ -71,8 +71,7 @@ routes.post('/test', async (c) => {
       return c.json({ status: 'ok', sandboxId: sandbox.id, sandboxState: sandbox.state, output: response.result })
     } finally {
       if (sandbox) await sandbox.delete(60, true).catch(() => undefined)
-      const dispose = daytona[Symbol.asyncDispose]
-      if (dispose) await dispose.call(daytona).catch(() => undefined)
+      await daytona[Symbol.asyncDispose].catch(() => undefined)
     }
   } catch (error) {
     const body = jsonError(error)
