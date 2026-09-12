@@ -24,6 +24,14 @@ export interface DaytonaConnectionResult {
   sandboxCleanedUp: true
 }
 
+export interface DaytonaPreflightResult {
+  reachable: boolean
+  classification: 'reachable' | 'authentication' | 'provider' | 'network' | 'timeout' | 'configuration'
+  providerStatus?: number
+  providerCode?: string
+  diagnostic?: string
+}
+
 interface DaytonaSandbox {
   id: string
   state?: string
@@ -73,7 +81,7 @@ function safeDiagnostic(value: unknown, apiKey = ''): string | undefined {
   let text = value
     .replace(/\s+/g, ' ')
     .replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, 'Bearer [REDACTED]')
-    .replace(/((?:api[_-]?key|access[_-]?token|authorization|cookie)\s*[=:]\s*)[^\s,;}"]+/gi, '$1[REDACTED]')
+    .replace(/((?:api[_-]?key|access[_-]?token|authorization|cookie)\s*[=:]\s*)[^\s,;}\"]+/gi, '$1[REDACTED]')
     .trim()
   if (apiKey) text = text.split(apiKey).join('[REDACTED]')
   if (!text) return undefined
@@ -127,6 +135,35 @@ export class DaytonaClient {
         throw new DaytonaHttpError(response.status, details.message, details.code)
       }
       return JSON.parse(raw) as T
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  async preflight(): Promise<DaytonaPreflightResult> {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs)
+    try {
+      const response = await this.fetcher(this.apiUrl, {
+        method: 'GET',
+        signal: controller.signal,
+        headers: { ...this.headers },
+      })
+      const raw = await response.text()
+      const details = providerErrorDetails(raw, this.apiKey)
+      const status = response.status
+      if (status === 401 || status === 403) {
+        return { reachable: true, classification: 'authentication', providerStatus: status, providerCode: details.code, diagnostic: details.message }
+      }
+      if (status === 429 || status >= 500) {
+        return { reachable: true, classification: 'provider', providerStatus: status, providerCode: details.code, diagnostic: details.message }
+      }
+      return { reachable: true, classification: 'reachable', providerStatus: status, providerCode: details.code, diagnostic: details.message }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') {
+        return { reachable: false, classification: 'timeout' }
+      }
+      return { reachable: false, classification: 'network', diagnostic: safeDiagnostic(error instanceof Error ? error.message : String(error), this.apiKey) }
     } finally {
       clearTimeout(timeout)
     }
@@ -333,6 +370,20 @@ routes.get('/status', async (c) => {
   } catch (error) {
     const body = jsonError(error)
     return c.json(body, error instanceof AppError ? error.status as any : 500)
+  }
+})
+
+routes.post('/preflight', async (c) => {
+  try {
+    await requireSetupOwner(c)
+    assertSameOrigin(c.req.url, c.req.header('Origin'))
+    c.header('Cache-Control', 'no-store')
+    const result = await getDaytona(c).preflight()
+    return c.json(result)
+  } catch (error) {
+    c.header('Cache-Control', 'no-store')
+    const body = jsonError(error)
+    return c.json(body, error instanceof AppError ? error.status as any : 502)
   }
 })
 
