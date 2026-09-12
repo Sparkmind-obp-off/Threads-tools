@@ -47,9 +47,9 @@ export async function requireOwner(
   now = new Date(),
 ): Promise<{ email: string }> {
   const teamDomain = config.teamDomain?.trim().replace(/^https?:\/\//, '').replace(/\/$/, '')
-  const audience = config.audience?.trim()
+  const audiences = config.audience?.split(/[\s,]+/).map((value) => value.trim()).filter(Boolean) ?? []
   const ownerEmail = config.ownerEmail?.trim().toLowerCase()
-  if (!teamDomain || !audience || !ownerEmail) {
+  if (!teamDomain || !audiences.length || !ownerEmail) {
     throw new AppError('OWNER_AUTHORIZATION_NOT_CONFIGURED', 'Cloudflare Access owner verification is not configured.', 503)
   }
   if (!assertion) throw new AppError('OWNER_AUTHORIZATION_REQUIRED', 'Owner authorization is required.', 401)
@@ -68,7 +68,7 @@ export async function requireOwner(
     )
     const tokenAudiences = Array.isArray(payload.aud) ? payload.aud : [payload.aud]
     const issuer = `https://${teamDomain}`
-    if (!valid || payload.iss !== issuer || !tokenAudiences.includes(audience) || !payload.exp || payload.exp <= Math.floor(now.getTime() / 1000)) throw new Error('Invalid claims')
+    if (!valid || payload.iss !== issuer || !tokenAudiences.some((value) => value && audiences.includes(value)) || !payload.exp || payload.exp <= Math.floor(now.getTime() / 1000)) throw new Error('Invalid claims')
     if (payload.email?.toLowerCase() !== ownerEmail) throw new Error('Not owner')
     return { email: ownerEmail }
   } catch {

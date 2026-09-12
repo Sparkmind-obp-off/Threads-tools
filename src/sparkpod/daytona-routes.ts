@@ -5,12 +5,14 @@ import type { Env } from '../config/env'
 
 const routes = new Hono<{ Bindings: Env }>()
 type DaytonaContext = Context<{ Bindings: Env }>
-type TestStage = 'create' | 'execute' | 'cleanup'
+type TestStage = 'create' | 'readiness' | 'execute' | 'verify' | 'cleanup'
 type TestStepStatus = 'completed' | 'failed' | 'not_started'
 
 export interface TestSteps {
   sandboxCreated: TestStepStatus
+  sandboxReady: TestStepStatus
   commandExecuted: TestStepStatus
+  outputVerified: TestStepStatus
   sandboxCleanedUp: TestStepStatus
 }
 
@@ -37,6 +39,7 @@ interface DaytonaCommandResult {
 
 const DEFAULT_API_URL = 'https://app.daytona.io/api'
 const DEFAULT_TARGET = 'us' as const
+const REQUEST_TIMEOUT_MS = 20_000
 
 class DaytonaHttpError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -53,6 +56,7 @@ export class DaytonaClient {
     private readonly apiUrl: string,
     private readonly target: 'us' | 'eu',
     private readonly fetcher: typeof fetch = fetch,
+    private readonly requestTimeoutMs = REQUEST_TIMEOUT_MS,
   ) {
     this.headers = {
       Authorization: `Bearer ${apiKey}`,
@@ -63,10 +67,20 @@ export class DaytonaClient {
   }
 
   private async send<T>(url: string, init: RequestInit): Promise<T> {
-    const response = await this.fetcher(url, { ...init, headers: { ...this.headers, ...(init.headers || {}) } })
-    if (!response.ok) throw new DaytonaHttpError(response.status, `Daytona request failed with status ${response.status}.`)
-    if (response.status === 204) return undefined as T
-    return response.json<T>()
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs)
+    try {
+      const response = await this.fetcher(url, {
+        ...init,
+        signal: controller.signal,
+        headers: { ...this.headers, ...(init.headers || {}) },
+      })
+      if (!response.ok) throw new DaytonaHttpError(response.status, `Daytona request failed with status ${response.status}.`)
+      if (response.status === 204) return undefined as T
+      return response.json<T>()
+    } finally {
+      clearTimeout(timeout)
+    }
   }
 
   private async sandbox(id: string): Promise<DaytonaSandbox> {
@@ -196,8 +210,14 @@ export function normalizeDaytonaFailure(error: unknown, stage: TestStage): AppEr
   if (stage === 'create') {
     return new AppError('SPARKPOD_SANDBOX_CREATION_FAILED', 'Daytona could not create the test sandbox.', 502, true)
   }
+  if (stage === 'readiness') {
+    return new AppError('SPARKPOD_SANDBOX_READINESS_FAILED', 'The Daytona sandbox was created but did not become ready.', 502, true)
+  }
   if (stage === 'execute') {
     return new AppError('SPARKPOD_COMMAND_EXECUTION_FAILED', 'The command could not be executed successfully in the Daytona sandbox.', 502, true)
+  }
+  if (stage === 'verify') {
+    return new AppError('SPARKPOD_OUTPUT_VERIFICATION_FAILED', 'The Daytona command completed but its deterministic output could not be verified.', 502, true)
   }
   return new AppError('SPARKPOD_CLEANUP_FAILED', 'The test completed, but the Daytona sandbox could not be deleted. Auto-delete remains enabled.', 502, true)
 }
@@ -228,21 +248,39 @@ export async function verifyDaytonaConnection(daytona: DaytonaClient, steps: Tes
     try {
       sandbox = await daytona.create()
       steps.sandboxCreated = 'completed'
-      sandbox = await daytona.waitUntilStarted(sandbox)
     } catch (error) {
-      if (!sandbox) steps.sandboxCreated = 'failed'
+      steps.sandboxCreated = 'failed'
       operationError = normalizeDaytonaFailure(error, 'create')
     }
 
     if (sandbox && !operationError) {
       try {
-        const response = await daytona.execute(sandbox)
-        const exitCode = response.exitCode ?? response.code
-        if (exitCode !== 0 || response.result?.trim() !== 'SparkPod OK') throw new Error('Unexpected command result')
+        sandbox = await daytona.waitUntilStarted(sandbox)
+        steps.sandboxReady = 'completed'
+      } catch (error) {
+        steps.sandboxReady = 'failed'
+        operationError = normalizeDaytonaFailure(error, 'readiness')
+      }
+    }
+
+    let response: DaytonaCommandResult | undefined
+    if (sandbox && !operationError) {
+      try {
+        response = await daytona.execute(sandbox)
         steps.commandExecuted = 'completed'
       } catch (error) {
         steps.commandExecuted = 'failed'
         operationError = normalizeDaytonaFailure(error, 'execute')
+      }
+    }
+
+    if (response && !operationError) {
+      const exitCode = response.exitCode ?? response.code
+      if (exitCode !== 0 || response.result?.trim() !== 'SparkPod OK') {
+        steps.outputVerified = 'failed'
+        operationError = normalizeDaytonaFailure(new Error('Unexpected command result'), 'verify')
+      } else {
+        steps.outputVerified = 'completed'
       }
     }
   } finally {
@@ -252,7 +290,7 @@ export async function verifyDaytonaConnection(daytona: DaytonaClient, steps: Tes
         steps.sandboxCleanedUp = 'completed'
       } catch (error) {
         steps.sandboxCleanedUp = 'failed'
-        operationError = normalizeDaytonaFailure(error, 'cleanup')
+        operationError ??= normalizeDaytonaFailure(error, 'cleanup')
       }
     }
   }
@@ -268,7 +306,13 @@ export async function verifyDaytonaConnection(daytona: DaytonaClient, steps: Tes
 }
 
 routes.post('/test', async (c) => {
-  const steps: TestSteps = { sandboxCreated: 'not_started', commandExecuted: 'not_started', sandboxCleanedUp: 'not_started' }
+  const steps: TestSteps = {
+    sandboxCreated: 'not_started',
+    sandboxReady: 'not_started',
+    commandExecuted: 'not_started',
+    outputVerified: 'not_started',
+    sandboxCleanedUp: 'not_started',
+  }
   try {
     await requireSetupOwner(c)
     assertSameOrigin(c.req.url, c.req.header('Origin'))

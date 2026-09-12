@@ -26,7 +26,7 @@ describe('owner authorization boundary', () => {
     const { token, publicJwk } = await assertion()
     const fetcher = vi.fn(async () => new Response(JSON.stringify({ keys: [publicJwk] }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as unknown as typeof fetch
     await expect(requireOwner(token, {
-      teamDomain: 'owner.cloudflareaccess.com', audience: 'access-audience', ownerEmail: 'OWNER@example.com',
+      teamDomain: 'owner.cloudflareaccess.com', audience: 'other-audience, access-audience', ownerEmail: 'OWNER@example.com',
     }, fetcher, new Date('2026-09-11T00:00:00Z'))).resolves.toEqual({ email: 'owner@example.com' })
     expect(fetcher).toHaveBeenCalledWith('https://owner.cloudflareaccess.com/cdn-cgi/access/certs')
   })

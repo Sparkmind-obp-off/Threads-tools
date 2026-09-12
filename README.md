@@ -263,7 +263,7 @@ npm run build
 Latest implementation gate:
 
 - TypeScript: passing
-- Automated tests: **87 passed / 87**
+- Automated tests: **91 passed / 91**
 - Production build: passing
 
 Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/token endpoints, strong state lifecycle, server-side token exchange/redaction, signed Access JWT owner verification, CSRF rejection, account/project discovery and ownership boundaries, encrypted credential-safe status, Production-only payloads, plain-text/secret-text classification, preservation of unrelated variables, post-write re-read, idempotent behavior, invalid/expired authorization, bootstrap fallback, browser/log/response credential boundaries, SparkPod UI security, Daytona stage-specific failure normalization, the safe boolean success response, and guaranteed cleanup after a sandbox was created but failed to become ready.
@@ -274,8 +274,8 @@ Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/tok
 - **Production:** https://threads-tools.pages.dev
 - **Access-ready custom hostname:** `threads-tools.sparkmind-obp.biz.id` (attached to Pages; DNS validation remains manual because the deployment token has no DNS-write permission)
 - **Deployment status:** Deployed through the Cloudflare Pages BYOK workflow on 2026-09-12
-- **Provider configuration status:** `DAYTONA_API_KEY` is present by name as an encrypted Production Secret. Its value was not read or returned. The owner-authorized create → execute → cleanup endpoint remains blocked until the Cloudflare Access owner boundary is configured.
-- **Private access:** Not configured. Cloudflare reports that Access is not enabled for the account, so the first Zero Trust onboarding and owner policy must be completed in the dashboard before the application can receive a signed `Cf-Access-Jwt-Assertion`.
+- **Provider configuration status:** `DAYTONA_API_KEY` is present by name as an encrypted Production Secret. Its value was not read or returned. A real Daytona run still requires the owner to authenticate through Cloudflare Access and explicitly select **Test Connection**.
+- **Private access:** Active on `threads-tools.sparkmind-obp.biz.id`, `threads-tools.pages.dev`, and wildcard Pages deployment URLs with the existing exact-owner allow policy. Production stores all three application audience tags in the encrypted `CF_ACCESS_AUD` binding; server verification accepts any configured exact tag.
 - **D1:** `threads-tools-production`; Wrangler reports all repository migrations applied, including removal of the legacy Daytona credential table
 
 To activate the provider connection:
@@ -285,15 +285,14 @@ To activate the provider connection:
 3. Add that exact URI to Meta's valid OAuth redirect URIs.
 4. Connect/reconnect from `/setup` so the token grant includes `threads_content_publish`.
 
-## Manual Cloudflare Access activation still required
+## Remaining operator configuration
 
-Cloudflare requires the account owner to complete the initial Zero Trust/Access onboarding in the dashboard; the current API token also has no DNS-write permission. These are the only remaining manual infrastructure steps:
+Cloudflare Access and both deployment hostnames are active. The remaining production prerequisites are provider configuration, not code changes:
 
-1. In the `sparkmind-obp.biz.id` DNS zone, create a proxied CNAME named `threads-tools` pointing to `threads-tools.pages.dev`. Wait until the Pages custom-domain status for `threads-tools.sparkmind-obp.biz.id` becomes Active.
-2. Open **Zero Trust → Access controls → Applications**, enable Access for the account, and create a **Self-hosted** application for `threads-tools.sparkmind-obp.biz.id` covering all paths.
-3. Add one **Allow** policy containing only the exact owner email used to sign in. Do not add a public/bypass policy.
-4. From the Access application, copy the immutable **Application Audience (AUD) Tag**. Copy the account's `<team>.cloudflareaccess.com` team domain.
-5. In **Workers & Pages → threads-tools → Settings → Variables and Secrets → Production**, add plain-text variables `CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com`, `CF_ACCESS_AUD=<AUD tag>`, and `OWNER_EMAIL=<exact policy email>`. Keep `DAYTONA_API_KEY` as the existing encrypted Production Secret.
-6. Redeploy Production, open `https://threads-tools.sparkmind-obp.biz.id/setup`, authenticate through Access, and select **Test Connection**. The expected safe response contains only `status`, `provider`, `sandboxCreated`, `commandExecuted`, and `sandboxCleanedUp`; it never includes the key, command output, or sandbox identifier.
+1. Create a private Cloudflare OAuth client with callback `https://threads-tools.sparkmind-obp.biz.id/auth/cloudflare/callback` and the minimum Pages read/write capabilities.
+2. Add `CLOUDFLARE_OAUTH_CLIENT_ID` and `CLOUDFLARE_OAUTH_SCOPES` as Production variables; add `CLOUDFLARE_OAUTH_CLIENT_SECRET` and a 32+ character `SESSION_SECRET` as encrypted Production secrets. Redeploy.
+3. Open `https://threads-tools.sparkmind-obp.biz.id/setup`, authenticate through Access, connect Cloudflare, select `threads-tools`, apply the Threads Production configuration, and re-check it.
+4. Keep `DAYTONA_API_KEY` only as the existing encrypted Production secret. Select **Test Connection** to run the real bounded create → readiness → execute → verify → cleanup proof. The safe response never includes the key, command output, or sandbox identifier.
+5. Connect Threads only after `THREADS_APP_ID`, `THREADS_APP_SECRET`, `THREADS_REDIRECT_URI`, and `SESSION_SECRET` report configured.
 
-The application already rejects the SparkPod status/test routes before reading `DAYTONA_API_KEY` unless the Access JWT signature, issuer, audience, expiry, and exact owner email all validate. No Daytona credential should be copied into source, D1, GitHub, chat, or the browser.
+The application rejects the SparkPod status/test routes before reading `DAYTONA_API_KEY` unless the Access JWT signature, issuer, one configured audience, expiry, and exact owner email all validate. No Daytona credential should be copied into source, D1, GitHub, chat, or the browser.

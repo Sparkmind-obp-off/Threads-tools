@@ -318,14 +318,18 @@ const sparkpodErrorMessages = {
   SPARKPOD_SECRET_MISSING: ['Secret missing', 'Add DAYTONA_API_KEY as a Cloudflare Production Secret, redeploy, then re-check.'],
   SPARKPOD_AUTHENTICATION_FAILED: ['Authentication failed', 'Daytona rejected the configured credential. Verify the Production Secret in Cloudflare.'],
   SPARKPOD_SANDBOX_CREATION_FAILED: ['Sandbox creation failed', 'Daytona connected, but could not create the isolated test sandbox.'],
-  SPARKPOD_COMMAND_EXECUTION_FAILED: ['Command execution failed', 'The sandbox was created, but the verification command did not complete successfully.'],
+  SPARKPOD_SANDBOX_READINESS_FAILED: ['Sandbox readiness failed', 'The sandbox was created but did not become ready before the bounded check completed. Cleanup was still attempted.'],
+  SPARKPOD_COMMAND_EXECUTION_FAILED: ['Command execution failed', 'The sandbox became ready, but the deterministic command could not be executed.'],
+  SPARKPOD_OUTPUT_VERIFICATION_FAILED: ['Output verification failed', 'The command completed, but its server-side deterministic result did not match the expected proof.'],
   SPARKPOD_CLEANUP_FAILED: ['Cleanup failed', 'The test ran, but the sandbox could not be deleted. Auto-delete remains enabled.'],
 }
 
 function sparkpodSteps(steps = {}) {
   const items = [
     ['sandboxCreated', 'Sandbox created'],
+    ['sandboxReady', 'Sandbox ready'],
     ['commandExecuted', 'Command executed successfully'],
+    ['outputVerified', 'Output verified server-side'],
     ['sandboxCleanedUp', 'Sandbox cleaned up'],
   ]
   return `<ol class="sparkpod-steps">${items.map(([key, label]) => {
@@ -370,7 +374,7 @@ async function testSparkPod() {
   result.innerHTML = `<div class="sparkpod-running"><strong>Testing the remote execution foundation…</strong>${sparkpodSteps()}</div>`
   try {
     const response = await request('/api/sparkpod/daytona/test', { method: 'POST' })
-    result.innerHTML = `<div class="alert success"><strong>✓ Daytona connected</strong><p>Cloudflare Secret → Daytona → Sandbox → Execute → Cleanup completed successfully.</p></div>${sparkpodSteps(response)}`
+    result.innerHTML = `<div class="alert success"><strong>✓ Daytona connected</strong><p>Cloudflare Secret → Daytona → Sandbox → Readiness → Execute → Verify → Cleanup completed successfully.</p></div>${sparkpodSteps(response)}`
   } catch (error) {
     const [title, guidance] = sparkpodErrorMessages[error.code] || ['Connection test failed', error.message || 'SparkPod could not complete the verification flow.']
     result.innerHTML = `<div class="alert error"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(guidance)}</p></div>${sparkpodSteps(error.steps)}`
