@@ -25,6 +25,14 @@ function jsonError(error: unknown) {
   return { error: { code: 'SPARKPOD_DAYTONA_ERROR', message, retryable: false } }
 }
 
+function wantsHtml(c: DaytonaContext): boolean {
+  return c.req.header('Accept')?.includes('text/html') === true
+}
+
+function htmlResult(title: string, message: string, backHref = '/setup'): Response {
+  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · Threads Tools</title><style>body{font-family:system-ui,sans-serif;max-width:720px;margin:4rem auto;padding:0 1rem}a{display:inline-block;margin-top:1rem}</style></head><body><h1>${title}</h1><p>${message}</p><a href="${backHref}">← Back to Threads Tools</a></body></html>`, { headers: { 'Content-Type': 'text/html; charset=UTF-8' } })
+}
+
 routes.get('/status', async (c) => {
   try {
     await requireSetupOwner(c)
@@ -42,11 +50,23 @@ routes.post('/credentials', async (c) => {
     assertSameOrigin(c.req.url, c.req.header('Origin'))
     const contentLength = Number(c.req.header('content-length') || 0)
     if (contentLength > 4096) throw new AppError('VALIDATION_FAILED', 'Daytona credential request is too large.', 413)
-    const body = await c.req.json<Record<string, unknown>>().catch(() => ({}))
-    const apiKey = typeof body.apiKey === 'string' ? body.apiKey : ''
-    const apiUrl = typeof body.apiUrl === 'string' ? body.apiUrl : undefined
-    const target = body.target === 'eu' ? 'eu' : body.target === 'us' ? 'us' : undefined
+    const contentType = c.req.header('Content-Type') || ''
+    let apiKey = ''
+    let apiUrl: string | undefined
+    let target: 'us' | 'eu' | undefined
+    if (contentType.includes('application/json')) {
+      const body = await c.req.json<Record<string, unknown>>().catch(() => ({}))
+      apiKey = typeof body.apiKey === 'string' ? body.apiKey : ''
+      apiUrl = typeof body.apiUrl === 'string' ? body.apiUrl : undefined
+      target = body.target === 'eu' ? 'eu' : body.target === 'us' ? 'us' : undefined
+    } else {
+      const body = await c.req.parseBody()
+      apiKey = typeof body.apiKey === 'string' ? body.apiKey : ''
+      apiUrl = typeof body.apiUrl === 'string' ? body.apiUrl : undefined
+      target = body.target === 'eu' ? 'eu' : body.target === 'us' ? 'us' : undefined
+    }
     await store(c.env).save(apiKey, apiUrl, target)
+    if (wantsHtml(c)) return htmlResult('Daytona connected', 'The API key was encrypted and stored server-side. No credential value was returned to the browser.', '/setup')
     return c.json({ status: 'connected', ...(await store(c.env).status()) })
   } catch (error) {
     const body = jsonError(error)
@@ -68,6 +88,7 @@ routes.post('/test', async (c) => {
         ttlMinutes: 10,
       })
       const response = await sandbox.process.executeCommand('printf "SparkPod OK\\n"')
+      if (wantsHtml(c)) return htmlResult('SparkPod test passed', `Daytona created sandbox ${sandbox.id}, executed the isolated command successfully, and the sandbox was deleted. Output: ${response.result.trim() || 'SparkPod OK'}.`, '/setup')
       return c.json({ status: 'ok', sandboxId: sandbox.id, sandboxState: sandbox.state, output: response.result })
     } finally {
       if (sandbox) await sandbox.delete(60, true).catch(() => undefined)
@@ -84,6 +105,7 @@ routes.post('/disconnect', async (c) => {
     await requireSetupOwner(c)
     assertSameOrigin(c.req.url, c.req.header('Origin'))
     await store(c.env).remove()
+    if (wantsHtml(c)) return htmlResult('Daytona disconnected', 'The encrypted Daytona credential has been removed.', '/setup')
     return c.json({ status: 'disconnected' })
   } catch (error) {
     const body = jsonError(error)
