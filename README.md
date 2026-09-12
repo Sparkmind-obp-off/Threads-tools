@@ -83,7 +83,7 @@ Implemented:
 
 - Focused `/setup` status and connection-test experience positioning SparkPod as the remote execution layer behind the future AI Business Operator
 - Server-only `DAYTONA_API_KEY` consumption from a Cloudflare Production Secret; no browser credential entry and no D1 credential persistence
-- Bounded Daytona verification flow: create an auto-delete sandbox → execute a deterministic command → verify output → explicitly delete and verify cleanup
+- Bounded Daytona verification flow: create a sandbox with auto-delete and a hard 10-minute TTL → wait for readiness → execute a deterministic command → verify output server-side → explicitly delete and verify cleanup, including when startup fails
 - Clear configured/not-configured status, successful step results, and separate secret, authentication, creation, execution, and cleanup failures
 - Worker-compatible Daytona REST integration that preserves the existing Hono route architecture without shipping Node-only SDK internals to Cloudflare
 
@@ -263,16 +263,16 @@ npm run build
 Latest implementation gate:
 
 - TypeScript: passing
-- Automated tests: **84 passed / 84**
+- Automated tests: **87 passed / 87**
 - Production build: passing
 
-Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/token endpoints, strong state lifecycle, server-side token exchange/redaction, signed Access JWT owner verification, CSRF rejection, account/project discovery and ownership boundaries, encrypted credential-safe status, Production-only payloads, plain-text/secret-text classification, preservation of unrelated variables, post-write re-read, idempotent behavior, invalid/expired authorization, bootstrap fallback, browser/log/response credential boundaries, SparkPod UI security, and Daytona stage-specific failure normalization.
+Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/token endpoints, strong state lifecycle, server-side token exchange/redaction, signed Access JWT owner verification, CSRF rejection, account/project discovery and ownership boundaries, encrypted credential-safe status, Production-only payloads, plain-text/secret-text classification, preservation of unrelated variables, post-write re-read, idempotent behavior, invalid/expired authorization, bootstrap fallback, browser/log/response credential boundaries, SparkPod UI security, Daytona stage-specific failure normalization, the safe boolean success response, and guaranteed cleanup after a sandbox was created but failed to become ready.
 
 ## Deployment
 
 - **Platform:** Cloudflare Pages + Hono + D1 (BYOK)
 - **Production:** https://threads-tools.pages.dev
-- **Deployment status:** SparkPod remote-execution foundation is implemented and ready for Cloudflare Pages BYOK deployment and owner-only production verification
+- **Deployment status:** SparkPod remote-execution foundation is implemented; deployment and owner-only production verification are performed through the Cloudflare Pages BYOK workflow
 - **Verified deployment:** Production branch `main`; canonical `https://threads-tools.pages.dev` and the latest immutable deployment URL were both route-verified
 - **Provider configuration status:** Not configured; `/setup` now provides exact actions, safe copy controls, the secure manual Cloudflare fallback, and fresh re-checks without exposing values
 - **Private access:** Not yet verified/configured; the URL returned HTTP 200 without an Access challenge during deployment verification. Configure Cloudflare Access for all page, API, and OAuth routes before treating it as private. The application intentionally has no in-app operator password.

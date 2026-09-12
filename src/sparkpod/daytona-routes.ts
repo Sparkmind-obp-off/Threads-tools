@@ -8,10 +8,18 @@ type DaytonaContext = Context<{ Bindings: Env }>
 type TestStage = 'create' | 'execute' | 'cleanup'
 type TestStepStatus = 'completed' | 'failed' | 'not_started'
 
-interface TestSteps {
+export interface TestSteps {
   sandboxCreated: TestStepStatus
   commandExecuted: TestStepStatus
   sandboxCleanedUp: TestStepStatus
+}
+
+export interface DaytonaConnectionResult {
+  status: 'connected'
+  provider: 'daytona'
+  sandboxCreated: true
+  commandExecuted: true
+  sandboxCleanedUp: true
 }
 
 interface DaytonaSandbox {
@@ -66,18 +74,25 @@ export class DaytonaClient {
   }
 
   async create(): Promise<DaytonaSandbox> {
-    let sandbox = await this.send<DaytonaSandbox>(`${this.apiUrl}/sandbox`, {
+    const sandbox = await this.send<DaytonaSandbox>(`${this.apiUrl}/sandbox`, {
       method: 'POST',
       body: JSON.stringify({
         name: `threads-tools-sparkpod-${crypto.randomUUID().slice(0, 8)}`,
         labels: { 'code-toolbox-language': 'typescript' },
         target: this.target,
         autoDeleteInterval: 10,
+        ttlMinutes: 10,
       }),
     })
+    if (!sandbox?.id) throw new Error('Daytona did not return a sandbox identifier.')
+    return sandbox
+  }
+
+  async waitUntilStarted(initial: DaytonaSandbox): Promise<DaytonaSandbox> {
+    let sandbox = initial
     const deadline = Date.now() + 45_000
     while (sandbox.state !== 'started') {
-      if (sandbox.state === 'error' || sandbox.state === 'build_failed') {
+      if (sandbox.state === 'error' || sandbox.state === 'build_failed' || sandbox.state === 'destroyed') {
         throw new Error('Sandbox entered a failed state.')
       }
       if (Date.now() >= deadline) throw new Error('Sandbox did not start before timeout.')
@@ -93,7 +108,11 @@ export class DaytonaClient {
       const response = await this.send<{ url: string }>(`${this.apiUrl}/sandbox/${encodeURIComponent(sandbox.id)}/toolbox-proxy-url`, { method: 'GET' })
       toolboxProxyUrl = response.url
     }
-    const base = toolboxProxyUrl.replace(/\/$/, '')
+    const proxyUrl = new URL(toolboxProxyUrl)
+    if (proxyUrl.protocol !== 'https:' || proxyUrl.username || proxyUrl.password) {
+      throw new Error('Daytona returned an invalid toolbox endpoint.')
+    }
+    const base = proxyUrl.toString().replace(/\/$/, '')
     return this.send<DaytonaCommandResult>(`${base}/${encodeURIComponent(sandbox.id)}/process/execute`, {
       method: 'POST',
       body: JSON.stringify({ command: 'printf "SparkPod OK\\n"', timeout: 10 }),
@@ -128,14 +147,6 @@ async function requireSetupOwner(c: DaytonaContext): Promise<void> {
 function jsonError(error: unknown, steps?: TestSteps) {
   if (error instanceof AppError) return { error: { code: error.code, message: error.message, retryable: error.retryable, steps } }
   return { error: { code: 'SPARKPOD_DAYTONA_ERROR', message: 'Daytona connection test failed unexpectedly.', retryable: true, steps } }
-}
-
-function wantsHtml(c: DaytonaContext): boolean {
-  return c.req.header('Accept')?.includes('text/html') === true
-}
-
-function htmlResult(title: string, message: string, backHref = '/setup'): Response {
-  return new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title} · Threads Tools</title><style>body{font-family:system-ui,sans-serif;max-width:720px;margin:4rem auto;padding:0 1rem}a{display:inline-block;margin-top:1rem}</style></head><body><h1>${title}</h1><p>${message}</p><a href="${backHref}">← Back to Threads Tools</a></body></html>`, { headers: { 'Content-Type': 'text/html; charset=UTF-8' } })
 }
 
 function getDaytona(c: DaytonaContext): DaytonaClient {
@@ -195,9 +206,11 @@ routes.get('/status', async (c) => {
   try {
     await requireSetupOwner(c)
     c.header('Cache-Control', 'no-store')
+    const configured = Boolean(c.env.DAYTONA_API_KEY?.trim())
     return c.json({
-      configured: Boolean(c.env.DAYTONA_API_KEY?.trim()),
-      provider: 'Daytona',
+      status: configured ? 'configured' : 'not_configured',
+      configured,
+      provider: 'daytona',
       credentialSource: 'Cloudflare Production Secret',
       secretName: 'DAYTONA_API_KEY',
     })
@@ -207,87 +220,64 @@ routes.get('/status', async (c) => {
   }
 })
 
-/**
- * Legacy endpoint intentionally retained as a safe migration guard.
- * Daytona credentials must never be accepted from the browser or stored in D1.
- */
-routes.post('/credentials', async (c) => {
+export async function verifyDaytonaConnection(daytona: DaytonaClient, steps: TestSteps): Promise<DaytonaConnectionResult> {
+  let sandbox: DaytonaSandbox | undefined
+  let operationError: AppError | undefined
+
   try {
-    await requireSetupOwner(c)
-    assertSameOrigin(c.req.url, c.req.header('Origin'))
-    throw new AppError('SPARKPOD_DAYTONA_SECRET_MANAGED_EXTERNALLY', 'Daytona credentials are managed as the Cloudflare Production Secret DAYTONA_API_KEY. This route does not accept or store API keys.', 409)
-  } catch (error) {
-    const body = jsonError(error)
-    if (wantsHtml(c)) return htmlResult('Daytona secret is managed by Cloudflare', body.error.message, '/setup')
-    return c.json(body, error instanceof AppError ? error.status as any : 409)
+    try {
+      sandbox = await daytona.create()
+      steps.sandboxCreated = 'completed'
+      sandbox = await daytona.waitUntilStarted(sandbox)
+    } catch (error) {
+      if (!sandbox) steps.sandboxCreated = 'failed'
+      operationError = normalizeDaytonaFailure(error, 'create')
+    }
+
+    if (sandbox && !operationError) {
+      try {
+        const response = await daytona.execute(sandbox)
+        const exitCode = response.exitCode ?? response.code
+        if (exitCode !== 0 || response.result?.trim() !== 'SparkPod OK') throw new Error('Unexpected command result')
+        steps.commandExecuted = 'completed'
+      } catch (error) {
+        steps.commandExecuted = 'failed'
+        operationError = normalizeDaytonaFailure(error, 'execute')
+      }
+    }
+  } finally {
+    if (sandbox) {
+      try {
+        await daytona.delete(sandbox)
+        steps.sandboxCleanedUp = 'completed'
+      } catch (error) {
+        steps.sandboxCleanedUp = 'failed'
+        operationError = normalizeDaytonaFailure(error, 'cleanup')
+      }
+    }
   }
-})
+
+  if (operationError) throw operationError
+  return {
+    status: 'connected',
+    provider: 'daytona',
+    sandboxCreated: true,
+    commandExecuted: true,
+    sandboxCleanedUp: true,
+  }
+}
 
 routes.post('/test', async (c) => {
   const steps: TestSteps = { sandboxCreated: 'not_started', commandExecuted: 'not_started', sandboxCleanedUp: 'not_started' }
   try {
     await requireSetupOwner(c)
     assertSameOrigin(c.req.url, c.req.header('Origin'))
-    const daytona = getDaytona(c)
-    let sandbox: DaytonaSandbox | undefined
-    let operationError: AppError | undefined
-    let output = ''
-
-    try {
-      try {
-        sandbox = await daytona.create()
-        steps.sandboxCreated = 'completed'
-      } catch (error) {
-        steps.sandboxCreated = 'failed'
-        operationError = normalizeDaytonaFailure(error, 'create')
-      }
-
-      if (sandbox && !operationError) {
-        try {
-          const response = await daytona.execute(sandbox)
-          const exitCode = response.exitCode ?? response.code
-          if (exitCode !== 0 || response.result?.trim() !== 'SparkPod OK') throw new Error('Unexpected command result')
-          output = response.result.trim()
-          steps.commandExecuted = 'completed'
-        } catch (error) {
-          steps.commandExecuted = 'failed'
-          operationError = normalizeDaytonaFailure(error, 'execute')
-        }
-      }
-    } finally {
-      if (sandbox) {
-        try {
-          await daytona.delete(sandbox)
-          steps.sandboxCleanedUp = 'completed'
-        } catch (error) {
-          steps.sandboxCleanedUp = 'failed'
-          operationError = normalizeDaytonaFailure(error, 'cleanup')
-        }
-      }
-    }
-
-    if (operationError) throw operationError
-    return c.json({ status: 'connected', provider: 'Daytona', message: 'Daytona connected', output, steps })
+    c.header('Cache-Control', 'no-store')
+    return c.json(await verifyDaytonaConnection(getDaytona(c), steps))
   } catch (error) {
+    c.header('Cache-Control', 'no-store')
     const body = jsonError(error, steps)
     return c.json(body, error instanceof AppError ? error.status as any : 502)
-  }
-})
-
-/**
- * Secret removal is deliberately not exposed from the application.
- * Remove DAYTONA_API_KEY from Cloudflare Pages Variables & Secrets if needed.
- */
-routes.post('/disconnect', async (c) => {
-  try {
-    await requireSetupOwner(c)
-    assertSameOrigin(c.req.url, c.req.header('Origin'))
-    const message = 'Daytona credentials are managed in Cloudflare Pages Variables & Secrets. Remove DAYTONA_API_KEY there to disconnect.'
-    if (wantsHtml(c)) return htmlResult('Manage Daytona secret in Cloudflare', message, '/setup')
-    return c.json({ status: 'managed_externally', secretName: 'DAYTONA_API_KEY', message })
-  } catch (error) {
-    const body = jsonError(error)
-    return c.json(body, error instanceof AppError ? error.status as any : 500)
   }
 })
 

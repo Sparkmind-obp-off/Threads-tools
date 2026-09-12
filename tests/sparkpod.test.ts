@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DaytonaClient, normalizeDaytonaFailure } from '../src/sparkpod/daytona-routes'
+import { DaytonaClient, normalizeDaytonaFailure, verifyDaytonaConnection, type TestSteps } from '../src/sparkpod/daytona-routes'
 
 describe('SparkPod Daytona failure contract', () => {
   it('uses the server credential for the bounded create, execute, and cleanup API flow', async () => {
@@ -16,7 +16,8 @@ describe('SparkPod Daytona failure contract', () => {
       return new Response('{}', { status: 404 })
     }
     const client = new DaytonaClient('server-only-secret', 'https://app.daytona.io/api', 'us', fetcher as typeof fetch)
-    const sandbox = await client.create()
+    const created = await client.create()
+    const sandbox = await client.waitUntilStarted(created)
     expect(await client.execute(sandbox)).toMatchObject({ exitCode: 0, result: 'SparkPod OK\n' })
     await client.delete(sandbox)
 
@@ -27,6 +28,53 @@ describe('SparkPod Daytona failure contract', () => {
       ['GET', 'https://app.daytona.io/api/sandbox/sandbox-1'],
     ])
     expect(calls.every((call) => new Headers(call.init?.headers).get('Authorization') === 'Bearer server-only-secret')).toBe(true)
+    expect(String(calls[0].init?.body)).toContain('"ttlMinutes":10')
+  })
+
+  it('returns only the safe boolean verification contract after create, execute, and confirmed cleanup', async () => {
+    const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/sandbox') && init?.method === 'POST') return Response.json({ id: 'sandbox-2', state: 'started', toolboxProxyUrl: 'https://proxy.app.daytona.io/toolbox' })
+      if (url.endsWith('/process/execute')) return Response.json({ exitCode: 0, result: 'SparkPod OK\n' })
+      if (url.endsWith('/sandbox/sandbox-2') && init?.method === 'DELETE') return Response.json({ id: 'sandbox-2', state: 'destroying' })
+      if (url.endsWith('/sandbox/sandbox-2')) return new Response('{}', { status: 404 })
+      return new Response('{}', { status: 500 })
+    }
+    const steps: TestSteps = { sandboxCreated: 'not_started', commandExecuted: 'not_started', sandboxCleanedUp: 'not_started' }
+    const result = await verifyDaytonaConnection(new DaytonaClient('server-only-secret', 'https://app.daytona.io/api', 'us', fetcher as typeof fetch), steps)
+
+    expect(result).toEqual({
+      status: 'connected',
+      provider: 'daytona',
+      sandboxCreated: true,
+      commandExecuted: true,
+      sandboxCleanedUp: true,
+    })
+    expect(JSON.stringify(result)).not.toContain('server-only-secret')
+    expect(JSON.stringify(result)).not.toContain('SparkPod OK')
+  })
+
+  it('cleans up a sandbox even when it fails while waiting to start', async () => {
+    const calls: Array<[string | undefined, string]> = []
+    let deleted = false
+    const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      calls.push([init?.method, url])
+      if (url.endsWith('/sandbox') && init?.method === 'POST') return Response.json({ id: 'sandbox-3', state: 'creating' })
+      if (url.endsWith('/sandbox/sandbox-3') && init?.method === 'DELETE') {
+        deleted = true
+        return Response.json({ id: 'sandbox-3', state: 'destroying' })
+      }
+      if (url.endsWith('/sandbox/sandbox-3') && deleted) return new Response('{}', { status: 404 })
+      if (url.endsWith('/sandbox/sandbox-3')) return Response.json({ id: 'sandbox-3', state: 'error' })
+      return new Response('{}', { status: 500 })
+    }
+    const steps: TestSteps = { sandboxCreated: 'not_started', commandExecuted: 'not_started', sandboxCleanedUp: 'not_started' }
+    const promise = verifyDaytonaConnection(new DaytonaClient('server-only-secret', 'https://app.daytona.io/api', 'us', fetcher as typeof fetch), steps)
+
+    await expect(promise).rejects.toMatchObject({ code: 'SPARKPOD_SANDBOX_CREATION_FAILED' })
+    expect(calls).toContainEqual(['DELETE', 'https://app.daytona.io/api/sandbox/sandbox-3'])
+    expect(steps).toEqual({ sandboxCreated: 'completed', commandExecuted: 'not_started', sandboxCleanedUp: 'completed' })
   })
 
   it('classifies provider authentication failures without returning provider details', () => {

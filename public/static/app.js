@@ -326,7 +326,8 @@ function sparkpodSteps(steps = {}) {
     ['sandboxCleanedUp', 'Sandbox cleaned up'],
   ]
   return `<ol class="sparkpod-steps">${items.map(([key, label]) => {
-    const status = steps[key] || 'not_started'
+    const value = steps[key]
+    const status = value === true || value === 'completed' ? 'completed' : value === false || value === 'failed' ? 'failed' : 'not_started'
     const symbol = status === 'completed' ? '✓' : status === 'failed' ? '×' : '–'
     return `<li class="${escapeHtml(status)}"><span aria-hidden="true">${symbol}</span>${escapeHtml(label)}</li>`
   }).join('')}</ol>`
@@ -365,8 +366,8 @@ async function testSparkPod() {
   result.dataset.tested = 'true'; result.classList.remove('hidden')
   result.innerHTML = `<div class="sparkpod-running"><strong>Testing the remote execution foundation…</strong>${sparkpodSteps()}</div>`
   try {
-    const response = await request('/api/sparkpod/daytona/test', { method: 'POST', headers: { Origin: location.origin } })
-    result.innerHTML = `<div class="alert success"><strong>✓ Daytona connected</strong><p>Cloudflare Secret → Daytona → Sandbox → Execute → Cleanup completed successfully.</p></div>${sparkpodSteps(response.steps)}`
+    const response = await request('/api/sparkpod/daytona/test', { method: 'POST' })
+    result.innerHTML = `<div class="alert success"><strong>✓ Daytona connected</strong><p>Cloudflare Secret → Daytona → Sandbox → Execute → Cleanup completed successfully.</p></div>${sparkpodSteps(response)}`
   } catch (error) {
     const [title, guidance] = sparkpodErrorMessages[error.code] || ['Connection test failed', error.message || 'SparkPod could not complete the verification flow.']
     result.innerHTML = `<div class="alert error"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(guidance)}</p></div>${sparkpodSteps(error.steps)}`

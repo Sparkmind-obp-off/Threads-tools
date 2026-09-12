@@ -55,6 +55,15 @@ describe('Phase 5 UI and browser security boundary', () => {
     expect(insights.status).toBe(200)
   })
 
+  it('does not expose Daytona credential storage or disconnect routes', async () => {
+    const [credentials, disconnect] = await Promise.all([
+      app.request('/api/sparkpod/daytona/credentials', { method: 'POST' }),
+      app.request('/api/sparkpod/daytona/disconnect', { method: 'POST' }),
+    ])
+    expect(credentials.status).toBe(404)
+    expect(disconnect.status).toBe(404)
+  })
+
   it('returns only safe configuration readiness states', async () => {
     const configured = await app.request('/api/configuration', undefined, environment())
     const configuredBody = await configured.json<Record<string, unknown>>()
