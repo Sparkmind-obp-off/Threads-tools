@@ -1,12 +1,13 @@
-import { Hono } from 'hono'
+import { Hono, type Context } from 'hono'
 import { assertSameOrigin, requireOwner } from '../auth/owner'
 import { AppError } from '../domain/types'
 import type { Env } from '../config/env'
 import { DaytonaCredentialStore } from './daytona'
 
 const routes = new Hono<{ Bindings: Env }>()
+type DaytonaContext = Context<{ Bindings: Env }>
 
-async function requireSetupOwner(c: Parameters<typeof routes.get>[1] extends never ? never : any): Promise<void> {
+async function requireSetupOwner(c: DaytonaContext): Promise<void> {
   await requireOwner(c.req.header('Cf-Access-Jwt-Assertion'), {
     teamDomain: c.env.CF_ACCESS_TEAM_DOMAIN,
     audience: c.env.CF_ACCESS_AUD,
@@ -67,15 +68,11 @@ routes.post('/test', async (c) => {
         ttlMinutes: 10,
       })
       const response = await sandbox.process.executeCommand('printf "SparkPod OK\\n"')
-      return c.json({
-        status: 'ok',
-        sandboxId: sandbox.id,
-        sandboxState: sandbox.state,
-        output: response.result,
-      })
+      return c.json({ status: 'ok', sandboxId: sandbox.id, sandboxState: sandbox.state, output: response.result })
     } finally {
       if (sandbox) await sandbox.delete(60, true).catch(() => undefined)
-      await daytona[Symbol.asyncDispose]?.().catch?.(() => undefined)
+      const dispose = daytona[Symbol.asyncDispose]
+      if (dispose) await dispose.call(daytona).catch(() => undefined)
     }
   } catch (error) {
     const body = jsonError(error)
