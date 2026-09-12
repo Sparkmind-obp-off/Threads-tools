@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-const repoRoot = resolve(new URL('..', import.meta.url).pathname, '..')
+const repoRoot = resolve(new URL('.', import.meta.url).pathname, '..')
 const image = 'threads-tools-sparkpod:local'
 const command = process.argv.slice(2).join(' ').trim()
 
