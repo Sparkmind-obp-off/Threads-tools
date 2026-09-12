@@ -272,11 +272,11 @@ Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/tok
 
 - **Platform:** Cloudflare Pages + Hono + D1 (BYOK)
 - **Production:** https://threads-tools.pages.dev
-- **Deployment status:** SparkPod remote-execution foundation is implemented; deployment and owner-only production verification are performed through the Cloudflare Pages BYOK workflow
-- **Verified deployment:** Production branch `main`; canonical `https://threads-tools.pages.dev` and the latest immutable deployment URL were both route-verified
-- **Provider configuration status:** Not configured; `/setup` now provides exact actions, safe copy controls, the secure manual Cloudflare fallback, and fresh re-checks without exposing values
-- **Private access:** Not yet verified/configured; the URL returned HTTP 200 without an Access challenge during deployment verification. Configure Cloudflare Access for all page, API, and OAuth routes before treating it as private. The application intentionally has no in-app operator password.
-- **D1:** `threads-tools-production`; migrations `0001`–`0003` are active and `0004_phase5_1_cloudflare_oauth.sql` adds encrypted Cloudflare OAuth persistence
+- **Deployment status:** Deployed through the Cloudflare Pages BYOK workflow on 2026-09-12
+- **Verified deployment:** Production branch `main`; canonical `https://threads-tools.pages.dev` and immutable deployment `https://827ab10c.threads-tools.pages.dev` both returned the current SparkPod `/setup` UI
+- **Provider configuration status:** `DAYTONA_API_KEY` is present by name as an encrypted Production Secret. Its value was not read or returned. The owner-authorized create → execute → cleanup endpoint remains blocked until the Cloudflare Access owner boundary is configured.
+- **Private access:** Not configured; `/setup` returned HTTP 200 without an Access challenge, while both SparkPod APIs safely returned `OWNER_AUTHORIZATION_NOT_CONFIGURED`. Configure Cloudflare Access plus `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, and `OWNER_EMAIL` before treating the deployment as private or running the production connection test.
+- **D1:** `threads-tools-production`; Wrangler reports all repository migrations applied, including removal of the legacy Daytona credential table
 
 To activate the provider connection:
 
@@ -287,4 +287,4 @@ To activate the provider connection:
 
 ## Gate and next steps
 
-The Phase 5.1 code gate is **BLOCKED** despite passing automated checks because the required real production verification cannot be inferred from tests. The owner must create the private Cloudflare OAuth client, install its client secret and exact scope IDs directly in Cloudflare, configure Cloudflare Access and the three owner-boundary values, apply migration `0004`, redeploy, complete consent/account/project discovery/Production apply/redeploy/re-check, and then verify the existing real Threads connection and dashboard. Never paste any secret into source, GitHub, chat, or the public setup page.
+The code, typecheck, tests, build, deployment, safe UI inspection, encrypted secret-presence check, and unauthenticated owner-boundary rejection are verified. The real production Daytona sandbox test is **BLOCKED** because Cloudflare Access and the three owner-boundary Production Variables (`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, `OWNER_EMAIL`) are not configured; the endpoint correctly refuses to touch Daytona before authorization. Configure that owner boundary, redeploy, sign in through Access, and select **Test Connection** to obtain the safe boolean create → execute → cleanup result. No Daytona credential should be copied into source, D1, GitHub, chat, or the browser.
