@@ -272,10 +272,10 @@ Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/tok
 
 - **Platform:** Cloudflare Pages + Hono + D1 (BYOK)
 - **Production:** https://threads-tools.pages.dev
+- **Access-ready custom hostname:** `threads-tools.sparkmind-obp.biz.id` (attached to Pages; DNS validation remains manual because the deployment token has no DNS-write permission)
 - **Deployment status:** Deployed through the Cloudflare Pages BYOK workflow on 2026-09-12
-- **Verified deployment:** Production branch `main`; canonical `https://threads-tools.pages.dev` and immutable deployment `https://827ab10c.threads-tools.pages.dev` both returned the current SparkPod `/setup` UI
 - **Provider configuration status:** `DAYTONA_API_KEY` is present by name as an encrypted Production Secret. Its value was not read or returned. The owner-authorized create → execute → cleanup endpoint remains blocked until the Cloudflare Access owner boundary is configured.
-- **Private access:** Not configured; `/setup` returned HTTP 200 without an Access challenge, while both SparkPod APIs safely returned `OWNER_AUTHORIZATION_NOT_CONFIGURED`. Configure Cloudflare Access plus `CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, and `OWNER_EMAIL` before treating the deployment as private or running the production connection test.
+- **Private access:** Not configured. Cloudflare reports that Access is not enabled for the account, so the first Zero Trust onboarding and owner policy must be completed in the dashboard before the application can receive a signed `Cf-Access-Jwt-Assertion`.
 - **D1:** `threads-tools-production`; Wrangler reports all repository migrations applied, including removal of the legacy Daytona credential table
 
 To activate the provider connection:
@@ -285,6 +285,15 @@ To activate the provider connection:
 3. Add that exact URI to Meta's valid OAuth redirect URIs.
 4. Connect/reconnect from `/setup` so the token grant includes `threads_content_publish`.
 
-## Gate and next steps
+## Manual Cloudflare Access activation still required
 
-The code, typecheck, tests, build, deployment, safe UI inspection, encrypted secret-presence check, and unauthenticated owner-boundary rejection are verified. The real production Daytona sandbox test is **BLOCKED** because Cloudflare Access and the three owner-boundary Production Variables (`CF_ACCESS_TEAM_DOMAIN`, `CF_ACCESS_AUD`, `OWNER_EMAIL`) are not configured; the endpoint correctly refuses to touch Daytona before authorization. Configure that owner boundary, redeploy, sign in through Access, and select **Test Connection** to obtain the safe boolean create → execute → cleanup result. No Daytona credential should be copied into source, D1, GitHub, chat, or the browser.
+Cloudflare requires the account owner to complete the initial Zero Trust/Access onboarding in the dashboard; the current API token also has no DNS-write permission. These are the only remaining manual infrastructure steps:
+
+1. In the `sparkmind-obp.biz.id` DNS zone, create a proxied CNAME named `threads-tools` pointing to `threads-tools.pages.dev`. Wait until the Pages custom-domain status for `threads-tools.sparkmind-obp.biz.id` becomes Active.
+2. Open **Zero Trust → Access controls → Applications**, enable Access for the account, and create a **Self-hosted** application for `threads-tools.sparkmind-obp.biz.id` covering all paths.
+3. Add one **Allow** policy containing only the exact owner email used to sign in. Do not add a public/bypass policy.
+4. From the Access application, copy the immutable **Application Audience (AUD) Tag**. Copy the account's `<team>.cloudflareaccess.com` team domain.
+5. In **Workers & Pages → threads-tools → Settings → Variables and Secrets → Production**, add plain-text variables `CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com`, `CF_ACCESS_AUD=<AUD tag>`, and `OWNER_EMAIL=<exact policy email>`. Keep `DAYTONA_API_KEY` as the existing encrypted Production Secret.
+6. Redeploy Production, open `https://threads-tools.sparkmind-obp.biz.id/setup`, authenticate through Access, and select **Test Connection**. The expected safe response contains only `status`, `provider`, `sandboxCreated`, `commandExecuted`, and `sandboxCleanedUp`; it never includes the key, command output, or sandbox identifier.
+
+The application already rejects the SparkPod status/test routes before reading `DAYTONA_API_KEY` unless the Access JWT signature, issuer, audience, expiry, and exact owner email all validate. No Daytona credential should be copied into source, D1, GitHub, chat, or the browser.

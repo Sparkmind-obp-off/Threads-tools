@@ -110,6 +110,8 @@ describe('Phase 5 UI and browser security boundary', () => {
     expect(html).toContain('Remote execution foundation')
     expect(html).toContain('SparkPod is the remote execution layer behind the future AI Business Operator')
     expect(html).toContain('Cloudflare Production Secret')
+    expect(html).toContain('Cloudflare owner authorization')
+    expect(html).toContain('Open Zero Trust Access')
     expect(html).toContain('DAYTONA_API_KEY')
     expect(html).toContain('Test Connection')
     expect(html).toContain('Create sandbox')
@@ -127,6 +129,9 @@ describe('Phase 5 UI and browser security boundary', () => {
     expect(script).toContain('Sandbox creation failed')
     expect(script).toContain('Command execution failed')
     expect(script).toContain('Cleanup failed')
+    expect(script).toContain('Cloudflare Access: Not configured')
+    expect(script).toContain('CF_ACCESS_TEAM_DOMAIN')
+    expect(script).toContain('configuration.actions.accessDashboardUrl')
     expect(script).toContain('✓ Daytona connected')
   })
 

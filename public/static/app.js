@@ -280,8 +280,11 @@ async function loadCloudflareConnection(configuration) {
   const projectSection = $('#project-section')
   const automaticSection = $('#automatic-configuration')
   if (!configuration.bridge.automatedWritesAvailable) {
+    const ownerBoundaryMissing = configuration.bridge.status === 'owner_boundary_required'
     badge.className = 'badge warning'; badge.textContent = 'Bootstrap required'
-    node.innerHTML = `<div class="bridge-state"><h3>Cloudflare OAuth client: Not configured</h3><p>${escapeHtml(configuration.bridge.reason)}</p><p>Create a private client with Authorization Code, <code>client_secret_basic</code>, the exact callback below, and the minimum Pages read/write capabilities.</p></div>`
+    node.innerHTML = ownerBoundaryMissing
+      ? `<div class="bridge-state"><h3>Cloudflare Access: Not configured</h3><p>${escapeHtml(configuration.bridge.reason)}</p><p>Enable Access for the production hostname, allow only the owner email, then add <code>CF_ACCESS_TEAM_DOMAIN</code>, <code>CF_ACCESS_AUD</code>, and <code>OWNER_EMAIL</code> as Production Variables.</p></div>`
+      : `<div class="bridge-state"><h3>Cloudflare OAuth client: Not configured</h3><p>${escapeHtml(configuration.bridge.reason)}</p><p>Create a private client with Authorization Code, <code>client_secret_basic</code>, the exact callback below, and the minimum Pages read/write capabilities.</p></div>`
     projectSection.classList.add('hidden'); automaticSection.classList.add('hidden')
     return undefined
   }
@@ -400,9 +403,13 @@ async function loadSetup() {
     $('#cloudflare-callback-url').textContent = configuration.bridge.callbackUrl
     $('#redirect-uri-suggestion').textContent = configuration.actions.redirectUriSuggestion
     $('#copy-redirect-uri').dataset.copyValue = configuration.actions.redirectUriSuggestion
+    $('#open-cloudflare-access').href = safeUrl(configuration.actions.accessDashboardUrl) || 'https://one.dash.cloudflare.com/'
     $('#open-oauth-clients').href = safeUrl(configuration.actions.oauthClientsDashboardUrl) || 'https://dash.cloudflare.com/'
     $('#open-cloudflare').href = safeUrl(configuration.actions.cloudflareDashboardUrl) || 'https://dash.cloudflare.com/'
-    $('#manual-bootstrap').innerHTML = `<p>${escapeHtml(configuration.bridge.reason)}</p><ul><li>Private OAuth client</li><li>Grant: <code>${escapeHtml(configuration.bridge.grantType)}</code></li><li>Token authentication: <code>${escapeHtml(configuration.bridge.tokenAuthenticationMethod)}</code></li><li>${escapeHtml(configuration.bridge.minimumScopeGuidance)}</li><li>Server bindings: ${configuration.bridge.requiredServerBindings.map((name) => `<code>${escapeHtml(name)}</code>`).join(', ')}</li></ul>`
+    const ownerBoundaryStep = configuration.bridge.status === 'owner_boundary_required'
+      ? '<li>Enable Cloudflare Access for the production custom hostname and allow only the exact owner email.</li><li>Copy the team domain and Application Audience (AUD) tag into the three owner Production Variables.</li>'
+      : ''
+    $('#manual-bootstrap').innerHTML = `<p>${escapeHtml(configuration.bridge.reason)}</p><ul>${ownerBoundaryStep}<li>Private OAuth client</li><li>Grant: <code>${escapeHtml(configuration.bridge.grantType)}</code></li><li>Token authentication: <code>${escapeHtml(configuration.bridge.tokenAuthenticationMethod)}</code></li><li>${escapeHtml(configuration.bridge.minimumScopeGuidance)}</li><li>Server bindings: ${configuration.bridge.requiredServerBindings.map((name) => `<code>${escapeHtml(name)}</code>`).join(', ')}</li></ul>`
     await loadCloudflareConnection(configuration)
 
     const connection = await request('/api/connection/status')

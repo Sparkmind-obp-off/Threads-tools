@@ -29,6 +29,7 @@ export interface ProductionConfigurationStatus {
   }
   actions: {
     cloudflareDashboardUrl: string
+    accessDashboardUrl: string
     oauthClientsDashboardUrl: string
     recheckUrl: '/api/configuration'
     redirectUriSuggestion: string
@@ -85,6 +86,7 @@ export function productionConfigurationStatus(env: Env, requestUrl: string, miss
     },
     actions: {
       cloudflareDashboardUrl: 'https://dash.cloudflare.com/?to=/:account/workers-and-pages',
+      accessDashboardUrl: 'https://one.dash.cloudflare.com/',
       oauthClientsDashboardUrl: 'https://dash.cloudflare.com/?to=/:account/oauth-clients',
       recheckUrl: '/api/configuration',
       redirectUriSuggestion: `${origin}/auth/threads/callback`,

@@ -16,7 +16,7 @@ The application reads it only through the Cloudflare runtime binding:
 ```text
 c.env.DAYTONA_API_KEY
         ↓
-@daytona/sdk
+server-side Daytona REST client
         ↓
 Daytona sandbox
 ```
@@ -39,6 +39,12 @@ Optional bindings:
 
 - `DAYTONA_API_URL` — defaults to `https://app.daytona.io/api`
 - `DAYTONA_TARGET` — defaults to `us`; supported values are `us` and `eu`
+
+## Manual Cloudflare Access prerequisite
+
+The test route is ready, but Cloudflare Access must first be enabled by the account owner in the Zero Trust dashboard. Production uses the custom hostname `threads-tools.sparkmind-obp.biz.id`; the `*.pages.dev` preview-access toggle does not protect the canonical production domain.
+
+Required manual values are `CF_ACCESS_TEAM_DOMAIN`, the Access application's immutable `CF_ACCESS_AUD`, and the exact allow-policy `OWNER_EMAIL`. Store them as plain-text Production Variables. This prerequisite does not change the Daytona secret contract.
 
 ## Test contract
 

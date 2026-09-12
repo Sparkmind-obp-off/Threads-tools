@@ -126,7 +126,10 @@ describe('Phase 5.1 Production configuration contract', () => {
     const status = productionConfigurationStatus(environment({ CLOUDFLARE_OAUTH_CLIENT_SECRET: undefined }), 'https://owner.example/setup', [])
     expect(status).toMatchObject({
       bridge: { status: 'oauth_bootstrap_required', automatedWritesAvailable: false, callbackUrl: 'https://owner.example/auth/cloudflare/callback' },
-      actions: { redirectUriSuggestion: 'https://owner.example/auth/threads/callback' },
+      actions: {
+        redirectUriSuggestion: 'https://owner.example/auth/threads/callback',
+        accessDashboardUrl: 'https://one.dash.cloudflare.com/',
+      },
     })
     expect(JSON.stringify(status)).not.toContain('threads-private-value')
     expect(JSON.stringify(status)).not.toContain('client-secret')
@@ -161,6 +164,8 @@ describe('Phase 5.1 route security and fallback', () => {
     const html = await (await app.request('/setup')).text()
     expect(html).toContain('Production Configuration Center')
     expect(html).toContain('Owner-authorized Pages access')
+    expect(html).toContain('Cloudflare owner authorization')
+    expect(html).toContain('Open Zero Trust Access')
     expect(html).toContain('Configure automatically')
     expect(html).toContain('Copy Redirect URI')
     expect(html).toContain('type="password"')
