@@ -14,6 +14,12 @@ export interface Env {
   CF_ACCESS_TEAM_DOMAIN?: string
   CF_ACCESS_AUD?: string
   OWNER_EMAIL?: string
+  /** Daytona infrastructure credential. Store only as a Cloudflare Pages Secret. */
+  DAYTONA_API_KEY?: string
+  /** Optional Daytona API endpoint override. */
+  DAYTONA_API_URL?: string
+  /** Optional Daytona deployment target. */
+  DAYTONA_TARGET?: 'us' | 'eu'
 }
 
 export interface AppConfig {
