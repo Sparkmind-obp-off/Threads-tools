@@ -36,6 +36,8 @@ describe('SparkPod Daytona failure contract', () => {
     ])
     expect(calls.every((call) => new Headers(call.init?.headers).get('Authorization') === 'Bearer server-only-secret')).toBe(true)
     expect(String(calls[0].init?.body)).toContain('"ttlMinutes":10')
+    expect(String(calls[0].init?.body)).toContain('"env":{}')
+    expect(String(calls[0].init?.body)).toContain('"code-toolbox-language":"typescript"')
   })
 
   it('returns only the safe boolean verification contract after create, execute, and confirmed cleanup', async () => {
@@ -57,7 +59,9 @@ describe('SparkPod Daytona failure contract', () => {
       status: 'connected',
       provider: 'daytona',
       sandboxCreated: true,
+      sandboxReady: true,
       commandExecuted: true,
+      outputVerified: true,
       sandboxCleanedUp: true,
     })
     expect(JSON.stringify(result)).not.toContain('server-only-secret')
@@ -163,22 +167,45 @@ describe('SparkPod Daytona failure contract', () => {
 
     const failure = normalizeDaytonaFailure(providerFailure, 'create')
     expect(failure).toMatchObject({
-      code: 'SPARKPOD_SANDBOX_CREATION_FAILED', retryable: false,
+      code: 'SPARKPOD_DAYTONA_CONTRACT_FAILED', retryable: false,
       providerStatus: status, providerCode: 'invalid_sandbox_request',
     })
     expect((failure as unknown as { diagnostic: string }).diagnostic).toHaveLength(500)
     expect(JSON.stringify(jsonError(failure))).not.toContain('must-not-be-returned')
   })
 
-  it('marks provider 5xx creation failures retryable', async () => {
-    const fetcher = vi.fn(async () => Response.json({ error: { type: 'provider_unavailable', message: 'Daytona is temporarily unavailable' } }, { status: 503 })) as unknown as typeof fetch
+  it.each([429, 500, 503])('marks transient HTTP %i creation failures retryable', async (status) => {
+    const fetcher = vi.fn(async () => Response.json({ error: { type: 'provider_unavailable', message: 'Daytona is temporarily unavailable' } }, { status })) as unknown as typeof fetch
     const client = new DaytonaClient('server-only-secret-value', 'https://app.daytona.io/api', 'us', fetcher)
     let providerFailure: unknown
     try { await client.create() } catch (error) { providerFailure = error }
 
     expect(normalizeDaytonaFailure(providerFailure, 'create')).toMatchObject({
-      code: 'SPARKPOD_SANDBOX_CREATION_FAILED', retryable: true, providerStatus: 503,
+      code: 'SPARKPOD_SANDBOX_CREATION_FAILED', retryable: true, providerStatus: status,
       providerCode: 'provider_unavailable', diagnostic: 'Daytona is temporarily unavailable',
+    })
+  })
+
+  it.each([400, 404, 422])('classifies HTTP %i create rejection as a non-retryable API contract failure', async (status) => {
+    const fetcher = vi.fn(async () => Response.json({ code: 'invalid_contract', message: 'request rejected' }, { status })) as unknown as typeof fetch
+    const client = new DaytonaClient('server-only-secret-value', 'https://app.daytona.io/api', 'us', fetcher)
+    let providerFailure: unknown
+    try { await client.create() } catch (error) { providerFailure = error }
+
+    expect(normalizeDaytonaFailure(providerFailure, 'create')).toMatchObject({
+      code: 'SPARKPOD_DAYTONA_CONTRACT_FAILED', retryable: false, providerStatus: status,
+      providerCode: 'invalid_contract', diagnostic: 'request rejected',
+    })
+  })
+
+  it('classifies a malformed successful provider response as a contract failure', async () => {
+    const fetcher = vi.fn(async () => new Response('<html>not json</html>', { status: 200 })) as unknown as typeof fetch
+    const client = new DaytonaClient('server-only-secret-value', 'https://app.daytona.io/api', 'us', fetcher)
+    let providerFailure: unknown
+    try { await client.create() } catch (error) { providerFailure = error }
+
+    expect(normalizeDaytonaFailure(providerFailure, 'create')).toMatchObject({
+      code: 'SPARKPOD_DAYTONA_CONTRACT_FAILED', retryable: false,
     })
   })
 
@@ -205,6 +232,25 @@ describe('SparkPod Daytona failure contract', () => {
 
     expect(normalizeDaytonaFailure(providerFailure, 'create')).toMatchObject({
       code: 'SPARKPOD_DAYTONA_NETWORK_FAILED', status: 502, retryable: true,
+    })
+  })
+
+  it('reports command execution failure and still cleans up the sandbox', async () => {
+    let deleted = false
+    const fetcher = async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/sandbox') && init?.method === 'POST') return Response.json({ id: 'sandbox-exec', state: 'started', toolboxProxyUrl: 'https://proxy.app.daytona.io/toolbox' })
+      if (url.endsWith('/process/execute')) return Response.json({ message: 'toolbox unavailable', code: 'toolbox_unavailable' }, { status: 503 })
+      if (url.endsWith('/sandbox/sandbox-exec') && init?.method === 'DELETE') { deleted = true; return Response.json({ state: 'destroying' }) }
+      if (url.endsWith('/sandbox/sandbox-exec') && deleted) return new Response('{}', { status: 404 })
+      return new Response('{}', { status: 500 })
+    }
+    const steps = freshSteps()
+    await expect(verifyDaytonaConnection(new DaytonaClient('server-only-secret-value', 'https://app.daytona.io/api', 'us', fetcher as typeof fetch), steps))
+      .rejects.toMatchObject({ code: 'SPARKPOD_COMMAND_EXECUTION_FAILED', providerStatus: 503, retryable: true })
+    expect(steps).toEqual({
+      sandboxCreated: 'completed', sandboxReady: 'completed', commandExecuted: 'failed',
+      outputVerified: 'not_started', sandboxCleanedUp: 'completed',
     })
   })
 

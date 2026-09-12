@@ -84,7 +84,9 @@ Implemented:
 - Focused `/setup` status and connection-test experience positioning SparkPod as the remote execution layer behind the future AI Business Operator
 - Server-only `DAYTONA_API_KEY` consumption from a Cloudflare Production Secret; no browser credential entry and no D1 credential persistence
 - Bounded Daytona verification flow: create a sandbox with auto-delete and a hard 10-minute TTL → wait for readiness → execute a deterministic command → verify output server-side → explicitly delete and verify cleanup, including when startup fails
-- Clear configured/not-configured status, successful step results, and separate authentication, creation, readiness, execution, verification, cleanup, timeout, and network failures
+- Creation uses the current Daytona REST contract and a 65-second client deadline, matching the official SDK's 60-second create allowance instead of aborting a healthy slow create request at 20 seconds
+- Clear configured/not-configured status, successful five-step results, and separate authentication, API-contract, creation, readiness, execution, verification, cleanup, timeout, and network failures
+- Owner-only same-origin `Daytona Reachability Diagnostic` calls the authenticated bounded sandbox-list endpoint without creating a sandbox; it is evidence only and never reports Connected
 - Bounded safe provider diagnostics (`providerStatus`, allow-listed message/code text up to 500 characters) with credential redaction; provider raw bodies, authorization headers, and secrets are never returned
 - `Configured` means only that `DAYTONA_API_KEY` exists; only a successful five-step production lifecycle proves `Connected`
 - Worker-compatible Daytona REST integration that preserves the existing Hono route architecture without shipping Node-only SDK internals to Cloudflare
@@ -151,7 +153,8 @@ There is no separate in-app operator password or application sign-in. Because th
 | `GET` | `/api/audit/events?after=&limit=` | Bounded safe operational events |
 | `POST` | `/api/publish/posts` | Validate and publish one text post with a client-generated request ID |
 | `GET` | `/api/sparkpod/daytona/status` | Owner-only safe SparkPod configuration status; never returns the secret value |
-| `POST` | `/api/sparkpod/daytona/test` | Owner-only same-origin create → execute → verify → cleanup test |
+| `POST` | `/api/sparkpod/daytona/preflight` | Owner-only same-origin authenticated reachability diagnostic; never creates a sandbox |
+| `POST` | `/api/sparkpod/daytona/test` | Owner-only same-origin create → readiness → execute → verify → cleanup test |
 | `GET` | `/auth/threads/start` | OAuth initiation |
 | `GET` | `/auth/threads/callback` | OAuth callback/state validation |
 
@@ -265,10 +268,10 @@ npm run build
 Latest implementation gate:
 
 - TypeScript: passing
-- Automated tests: **91 passed / 91**
+- Automated tests: **117 passed / 117**
 - Production build: passing
 
-Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/token endpoints, strong state lifecycle, server-side token exchange/redaction, signed Access JWT owner verification, CSRF rejection, account/project discovery and ownership boundaries, encrypted credential-safe status, Production-only payloads, plain-text/secret-text classification, preservation of unrelated variables, post-write re-read, idempotent behavior, invalid/expired authorization, bootstrap fallback, browser/log/response credential boundaries, SparkPod UI security, Daytona stage-specific failure normalization, the safe boolean success response, and guaranteed cleanup after a sandbox was created but failed to become ready.
+Automated tests cover all Phase 1–5 behavior plus Cloudflare authorization/token endpoints, strong state lifecycle, server-side token exchange/redaction, signed Access JWT owner verification, CSRF rejection, account/project discovery and ownership boundaries, encrypted credential-safe status, Production-only payloads, plain-text/secret-text classification, preservation of unrelated variables, post-write re-read, idempotent behavior, invalid/expired authorization, bootstrap fallback, browser/log/response credential boundaries, SparkPod UI security, authenticated no-create Daytona preflight behavior, 400/401/403/404/422/429/5xx and malformed-response classification, timeout/network handling, all five lifecycle stages, safe success responses, and guaranteed cleanup after post-create failures.
 
 ## Deployment
 

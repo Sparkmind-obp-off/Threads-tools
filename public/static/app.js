@@ -320,6 +320,7 @@ async function loadCloudflareConnection(configuration) {
 const sparkpodErrorMessages = {
   SPARKPOD_SECRET_MISSING: ['Secret missing', 'Add DAYTONA_API_KEY as a Cloudflare Production Secret, redeploy, then re-check.'],
   SPARKPOD_AUTHENTICATION_FAILED: ['Authentication failed', 'Daytona rejected the configured credential. Verify the Production Secret in Cloudflare.'],
+  SPARKPOD_DAYTONA_CONTRACT_FAILED: ['Daytona API contract mismatch', 'Daytona was reached, but the endpoint or sandbox request was rejected by the current API contract.'],
   SPARKPOD_SANDBOX_CREATION_FAILED: ['Sandbox creation failed', 'Daytona connected, but could not create the isolated test sandbox.'],
   SPARKPOD_SANDBOX_READINESS_FAILED: ['Sandbox readiness failed', 'The sandbox was created but did not become ready before the bounded check completed. Cleanup was still attempted.'],
   SPARKPOD_COMMAND_EXECUTION_FAILED: ['Command execution failed', 'The sandbox became ready, but the deterministic command could not be executed.'],
@@ -371,16 +372,44 @@ async function loadSparkPod() {
   }
 }
 
+async function runDaytonaPreflight() {
+  const button = $('#daytona-preflight')
+  const result = $('#daytona-preflight-result')
+  button.disabled = true; button.textContent = 'Checking…'; button.setAttribute('aria-busy', 'true')
+  result.classList.remove('hidden')
+  result.innerHTML = '<div class="sparkpod-running"><strong>Checking the authenticated Daytona API endpoint without creating a sandbox…</strong></div>'
+  try {
+    const response = await request('/api/sparkpod/daytona/preflight', { method: 'POST' })
+    const providerDetails = [
+      Number.isInteger(response.providerStatus) ? `HTTP ${response.providerStatus}` : '',
+      response.providerCode ? `Code: ${response.providerCode}` : '',
+      response.diagnostic || '',
+    ].filter(Boolean).map(escapeHtml).join(' — ')
+    const reachable = response.reachable
+    result.innerHTML = `<div class="alert ${reachable ? 'success' : 'error'}"><strong>${reachable ? 'Daytona endpoint reached' : 'Daytona endpoint unreachable'}</strong><p>Classification: ${escapeHtml(response.classification)}</p>${providerDetails ? `<p><strong>Safe Daytona diagnostic:</strong> ${providerDetails}</p>` : ''}<p>This diagnostic never creates a sandbox and does not count as Connected.</p></div>`
+  } catch (error) {
+    result.innerHTML = `<div class="alert error"><strong>Reachability diagnostic failed</strong><p>${escapeHtml(error.message)}</p><p>This diagnostic never creates a sandbox and does not count as Connected.</p></div>`
+  } finally {
+    button.disabled = false; button.textContent = 'Run Reachability Diagnostic'; button.removeAttribute('aria-busy')
+  }
+}
+
 async function testSparkPod() {
   const button = $('#test-sparkpod')
   const result = $('#sparkpod-test-result')
+  const badge = $('#sparkpod-status-badge')
+  const statusText = $('#sparkpod-status-text')
   button.disabled = true; button.textContent = 'Testing…'; button.setAttribute('aria-busy', 'true')
   result.dataset.tested = 'true'; result.classList.remove('hidden')
   result.innerHTML = `<div class="sparkpod-running"><strong>Testing the remote execution foundation…</strong>${sparkpodSteps()}</div>`
   try {
     const response = await request('/api/sparkpod/daytona/test', { method: 'POST' })
+    badge.className = 'badge supported'; badge.textContent = 'Connected'
+    statusText.textContent = 'Connected — five-step lifecycle verified'
     result.innerHTML = `<div class="alert success"><strong>✓ Daytona connected</strong><p>Cloudflare Secret → Daytona → Sandbox → Readiness → Execute → Verify → Cleanup completed successfully.</p></div>${sparkpodSteps(response)}`
   } catch (error) {
+    badge.className = 'badge warning'; badge.textContent = 'Configured'
+    statusText.textContent = 'Configured — connection test failed'
     const [title, guidance] = sparkpodErrorMessages[error.code] || ['Connection test failed', error.message || 'SparkPod could not complete the verification flow.']
     const providerDetails = [
       Number.isInteger(error.providerStatus) ? `HTTP ${error.providerStatus}` : '',
@@ -389,8 +418,7 @@ async function testSparkPod() {
     ].filter(Boolean).map(escapeHtml).join(' — ')
     result.innerHTML = `<div class="alert error"><strong>${escapeHtml(title)}</strong><p>${escapeHtml(guidance)}</p>${providerDetails ? `<p><strong>Safe Daytona diagnostic:</strong> ${providerDetails}</p>` : ''}<p><strong>Retryable:</strong> ${error.retryable ? 'Yes' : 'No'}</p></div>${sparkpodSteps(error.steps)}`
   } finally {
-    button.textContent = 'Test Connection'; button.removeAttribute('aria-busy')
-    await loadSparkPod()
+    button.disabled = false; button.textContent = 'Test Connection'; button.removeAttribute('aria-busy')
   }
 }
 
@@ -812,6 +840,7 @@ $('#recheck-configuration')?.addEventListener('click', loadSetup)
 $('#project-form')?.addEventListener('submit', selectCloudflareProject)
 $('#configuration-form')?.addEventListener('submit', applyProductionConfiguration)
 $('#disconnect-cloudflare')?.addEventListener('click', disconnectCloudflare)
+$('#daytona-preflight')?.addEventListener('click', runDaytonaPreflight)
 $('#test-sparkpod')?.addEventListener('click', testSparkPod)
 document.querySelectorAll('[data-copy-value]').forEach((button) => button.addEventListener('click', () => copySafeValue(button.dataset.copyValue, button)))
 async function init() {

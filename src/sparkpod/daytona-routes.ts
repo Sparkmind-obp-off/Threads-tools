@@ -20,7 +20,9 @@ export interface DaytonaConnectionResult {
   status: 'connected'
   provider: 'daytona'
   sandboxCreated: true
+  sandboxReady: true
   commandExecuted: true
+  outputVerified: true
   sandboxCleanedUp: true
 }
 
@@ -47,7 +49,10 @@ interface DaytonaCommandResult {
 
 const DEFAULT_API_URL = 'https://app.daytona.io/api'
 const DEFAULT_TARGET = 'us' as const
-const REQUEST_TIMEOUT_MS = 20_000
+// Daytona's create operation is allowed up to 60 seconds by the official SDK.
+// Keep the client deadline slightly above that provider operation deadline so a
+// healthy, slow sandbox creation is not aborted and misreported as a network failure.
+const REQUEST_TIMEOUT_MS = 65_000
 const PROVIDER_DIAGNOSTIC_LIMIT = 500
 
 class DaytonaHttpError extends Error {
@@ -58,6 +63,20 @@ class DaytonaHttpError extends Error {
   ) {
     super(`Daytona request failed with status ${status}.`)
     this.name = 'DaytonaHttpError'
+  }
+}
+
+class DaytonaTimeoutError extends Error {
+  constructor() {
+    super('Daytona request timed out.')
+    this.name = 'DaytonaTimeoutError'
+  }
+}
+
+class DaytonaContractError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'DaytonaContractError'
   }
 }
 
@@ -123,18 +142,30 @@ export class DaytonaClient {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs)
     try {
-      const response = await this.fetcher(url, {
-        ...init,
-        signal: controller.signal,
-        headers: { ...this.headers, ...(init.headers || {}) },
-      })
-      if (response.status === 204) return undefined as T
-      const raw = await response.text()
+      let response: Response
+      try {
+        response = await this.fetcher(url, {
+          ...init,
+          signal: controller.signal,
+          headers: { ...this.headers, ...(init.headers || {}) },
+        })
+      } catch (error) {
+        if (controller.signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+          throw new DaytonaTimeoutError()
+        }
+        throw error
+      }
+      const raw = response.status === 204 ? '' : await response.text()
       if (!response.ok) {
         const details = providerErrorDetails(raw, this.apiKey)
         throw new DaytonaHttpError(response.status, details.message, details.code)
       }
-      return JSON.parse(raw) as T
+      if (!raw.trim()) return undefined as T
+      try {
+        return JSON.parse(raw) as T
+      } catch {
+        throw new DaytonaContractError('Daytona returned a malformed JSON response.')
+      }
     } finally {
       clearTimeout(timeout)
     }
@@ -144,7 +175,9 @@ export class DaytonaClient {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs)
     try {
-      const response = await this.fetcher(this.apiUrl, {
+      // A bounded list request validates the real authenticated API endpoint without
+      // creating a sandbox. GET /api itself is public Swagger HTML and cannot prove auth.
+      const response = await this.fetcher(`${this.apiUrl}/sandbox?limit=1`, {
         method: 'GET',
         signal: controller.signal,
         headers: { ...this.headers },
@@ -155,12 +188,15 @@ export class DaytonaClient {
       if (status === 401 || status === 403) {
         return { reachable: true, classification: 'authentication', providerStatus: status, providerCode: details.code, diagnostic: details.message }
       }
+      if (status === 400 || status === 404 || status === 422) {
+        return { reachable: true, classification: 'configuration', providerStatus: status, providerCode: details.code, diagnostic: details.message }
+      }
       if (status === 429 || status >= 500) {
         return { reachable: true, classification: 'provider', providerStatus: status, providerCode: details.code, diagnostic: details.message }
       }
       return { reachable: true, classification: 'reachable', providerStatus: status, providerCode: details.code, diagnostic: details.message }
     } catch (error) {
-      if (error instanceof DOMException && error.name === 'AbortError') {
+      if (controller.signal.aborted || error instanceof DaytonaTimeoutError || (error instanceof DOMException && error.name === 'AbortError')) {
         return { reachable: false, classification: 'timeout' }
       }
       return { reachable: false, classification: 'network', diagnostic: safeDiagnostic(error instanceof Error ? error.message : String(error), this.apiKey) }
@@ -178,6 +214,9 @@ export class DaytonaClient {
       method: 'POST',
       body: JSON.stringify({
         name: `threads-tools-sparkpod-${crypto.randomUUID().slice(0, 8)}`,
+        // This mirrors the current SDK's CreateSandbox request contract. The
+        // language is represented by the toolbox label in the REST payload.
+        env: {},
         labels: { 'code-toolbox-language': 'typescript' },
         target: this.target,
         autoDeleteInterval: 10,
@@ -300,9 +339,12 @@ export function normalizeDaytonaFailure(error: unknown, stage: TestStage): AppEr
   const classificationText = `${providerMessage || ''} ${providerCode || ''} ${internalMessage}`
   const authenticationFailure = status === 401 || status === 403
     || /(?:invalid|expired|missing|rejected|revoked)\s+(?:auth(?:entication|orization)?|api.?key|credential|token)|(?:forbidden|unauthori[sz]ed)/i.test(classificationText)
-  const timedOut = error instanceof DOMException && error.name === 'AbortError'
+  const timedOut = error instanceof DaytonaTimeoutError
+    || (error instanceof DOMException && error.name === 'AbortError')
     || /timeout|timed out|did not .* before timeout/i.test(internalMessage)
-  const networkFailure = !status && (error instanceof TypeError || /network|fetch|connection|socket|dns/i.test(internalMessage))
+  const networkFailure = !status && !timedOut && (error instanceof TypeError || /network|fetch|connection|socket|dns/i.test(internalMessage))
+  const contractFailure = error instanceof DaytonaContractError
+    || (stage === 'create' && (status === 400 || status === 404 || status === 422))
   const retryable = status === 429 || (typeof status === 'number' && status >= 500) || status === undefined
 
   if (authenticationFailure) {
@@ -333,6 +375,17 @@ export function normalizeDaytonaFailure(error: unknown, stage: TestStage): AppEr
       `The Daytona network request failed during ${stage}.`,
       502,
       true,
+      status,
+      providerMessage,
+      providerCode,
+    )
+  }
+  if (contractFailure) {
+    return new DaytonaFailure(
+      'SPARKPOD_DAYTONA_CONTRACT_FAILED',
+      'Daytona was reached, but the configured endpoint or sandbox request does not match the current API contract.',
+      502,
+      false,
       status,
       providerMessage,
       providerCode,
@@ -447,7 +500,9 @@ export async function verifyDaytonaConnection(daytona: DaytonaClient, steps: Tes
     status: 'connected',
     provider: 'daytona',
     sandboxCreated: true,
+    sandboxReady: true,
     commandExecuted: true,
+    outputVerified: true,
     sandboxCleanedUp: true,
   }
 }
